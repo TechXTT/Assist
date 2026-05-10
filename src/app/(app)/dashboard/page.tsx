@@ -9,10 +9,15 @@ import { env } from "@/lib/env";
 import { listTodayTasks, listWeekDeadlines } from "@/lib/tasks/task-queries";
 import { populateTinyFirstSteps } from "@/lib/tasks/tiny-first-step";
 import { listActiveReminders } from "@/lib/tasks/reminders";
+import { maybeSyncCalendar } from "@/lib/google/sync";
 import { ReminderBanners } from "@/components/reminder-banners";
 import { PlaceholderCard } from "@/components/placeholder-card";
-import { TodayCard } from "@/app/(app)/dashboard/_components/today-card";
+import {
+  TodayCard,
+  type TodayItem
+} from "@/app/(app)/dashboard/_components/today-card";
 import { DeadlinesCard } from "@/app/(app)/dashboard/_components/deadlines-card";
+import { ReauthBanner } from "@/app/(app)/dashboard/_components/reauth-banner";
 
 export const dynamic = "force-dynamic";
 
@@ -25,12 +30,20 @@ function todayBoundsUtc(timezone: string) {
   };
 }
 
+function sortKey(item: TodayItem): number {
+  if (item.kind === "task") return item.dueAt.getTime();
+  // All-day events sort to the very top of the day.
+  if (item.allDay) return -Infinity;
+  return item.startsAt.getTime();
+}
+
 export default async function DashboardPage() {
   const session = await getServerSession(authOptions);
   if (!session?.user?.id) redirect("/login");
 
+  const userId = session.user.id;
   const user = await prisma.user.findUnique({
-    where: { id: session.user.id },
+    where: { id: userId },
     select: { name: true, timezone: true }
   });
   const tz = user?.timezone || env.DEFAULT_TIMEZONE;
@@ -38,13 +51,33 @@ export default async function DashboardPage() {
 
   const { start, end } = todayBoundsUtc(tz);
 
-  const [todayTasks, weekTasks, activeReminders] = await Promise.all([
-    listTodayTasks(session.user.id, start, end),
-    listWeekDeadlines(session.user.id),
-    listActiveReminders(session.user.id)
+  // Trigger sync first (read-on-demand). Branches the rest of the render.
+  const syncResult = await maybeSyncCalendar(userId);
+
+  const [todayTasks, weekTasks, activeReminders, todayEvents] = await Promise.all([
+    listTodayTasks(userId, start, end),
+    listWeekDeadlines(userId),
+    listActiveReminders(userId),
+    prisma.calendarEvent.findMany({
+      where: {
+        userId,
+        status: { not: "cancelled" },
+        startsAt: { lt: end },
+        endsAt: { gt: start }
+      },
+      orderBy: { startsAt: "asc" },
+      select: {
+        id: true,
+        title: true,
+        startsAt: true,
+        endsAt: true,
+        allDay: true,
+        location: true,
+        htmlLink: true
+      }
+    })
   ]);
 
-  // Lazily populate tiny-first-step for any deadline-this-week task that qualifies.
   const tinyMap = await populateTinyFirstSteps(
     weekTasks.map((t) => ({
       id: t.id,
@@ -55,14 +88,40 @@ export default async function DashboardPage() {
     }))
   );
 
+  const todayItems: TodayItem[] = [
+    ...todayTasks.map<TodayItem>((t) => ({
+      kind: "task",
+      id: t.id,
+      title: t.title,
+      dueAt: t.dueAt!,
+      priority: t.priority
+    })),
+    ...todayEvents.map<TodayItem>((e) => ({
+      kind: "event",
+      id: e.id,
+      title: e.title,
+      startsAt: e.startsAt,
+      endsAt: e.endsAt,
+      allDay: e.allDay,
+      location: e.location,
+      htmlLink: e.htmlLink
+    }))
+  ].sort((a, b) => sortKey(a) - sortKey(b));
+
   return (
     <div className="space-y-6">
       <div className="space-y-1">
         <h1 className="text-2xl font-semibold tracking-tight">Hey {firstName} 👋</h1>
-        <p className="text-sm text-muted-foreground">
-          Here's what's on your plate.
-        </p>
+        <p className="text-sm text-muted-foreground">Here's what's on your plate.</p>
       </div>
+
+      {syncResult === "reauth" && <ReauthBanner />}
+
+      {syncResult === "failed" && (
+        <p className="rounded-md border bg-muted/30 px-3 py-2 text-sm text-muted-foreground">
+          Couldn't reach Google right now — showing the latest cached events.
+        </p>
+      )}
 
       <ReminderBanners
         reminders={activeReminders.map((r) => ({
@@ -74,14 +133,7 @@ export default async function DashboardPage() {
       />
 
       <div className="grid gap-4 md:grid-cols-2">
-        <TodayCard
-          items={todayTasks.map((t) => ({
-            id: t.id,
-            title: t.title,
-            dueAt: t.dueAt,
-            priority: t.priority
-          }))}
-        />
+        <TodayCard items={todayItems} />
         <DeadlinesCard
           items={weekTasks
             .filter((t): t is typeof t & { dueAt: Date } => t.dueAt !== null)

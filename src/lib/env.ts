@@ -10,7 +10,8 @@ const envSchema = z.object({
   ANTHROPIC_API_KEY: z.string().optional().default(""),
   AI_MONTHLY_CAP_USD: z.coerce.number().default(5),
   DEFAULT_TIMEZONE: z.string().default("Europe/Amsterdam"),
-  DEFAULT_CURRENCY: z.string().default("EUR")
+  DEFAULT_CURRENCY: z.string().default("EUR"),
+  CALENDAR_SYNC_STALENESS_MINUTES: z.coerce.number().default(15)
 });
 
 const parsed = envSchema.safeParse(process.env);
