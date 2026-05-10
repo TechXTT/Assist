@@ -14,16 +14,20 @@ datasource db {
 // ----- Auth (NextAuth + @next-auth/prisma-adapter shape) -----
 
 model User {
-  id                 String    @id @default(cuid())
-  email              String    @unique
-  name               String?
-  image              String?
-  timezone           String    @default("Europe/Amsterdam")
-  briefingTime       String    @default("11:00")
-  emailVerified      DateTime?
-  createdAt          DateTime  @default(now())
-  lastCalendarSyncAt DateTime?
-  googleNeedsReauth  Boolean   @default(false)
+  id                              String    @id @default(cuid())
+  email                           String    @unique
+  name                            String?
+  image                           String?
+  timezone                        String    @default("Europe/Amsterdam")
+  briefingTime                    String    @default("11:00")
+  emailVerified                   DateTime?
+  createdAt                       DateTime  @default(now())
+  lastCalendarSyncAt              DateTime?
+  googleNeedsReauth               Boolean   @default(false)
+  cashFlowHorizonDays             Int       @default(30)
+  cashFlowTightThresholdCents     Int       @default(10000)
+  cashFlowIncludeDiscretionary    Boolean   @default(true)
+  cashFlowDiscretionaryDailyCents Int?
 
   accounts          Account[]
   sessions          Session[]
@@ -219,6 +223,7 @@ model FinancialAccount {
   includeInNetWorth      Boolean  @default(true)
   archived               Boolean  @default(false)
   notes                  String?
+  includeInCashFlow      Boolean  @default(true)
 
   // Shared rate field — APY for savings, APR for credit + loan. Basis points.
   rateBps                Int?

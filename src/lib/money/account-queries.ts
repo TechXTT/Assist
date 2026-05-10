@@ -24,6 +24,7 @@ export type FinancialAccountRow = {
   paymentDueDay: number | null;
   institution: string | null;
   trackHoldings: boolean;
+  includeInCashFlow: boolean;
 };
 
 export async function listFinancialAccounts(
@@ -57,6 +58,7 @@ export async function listFinancialAccounts(
       paymentDueDay: true,
       institution: true,
       trackHoldings: true,
+      includeInCashFlow: true,
       snapshots: {
         orderBy: { takenAt: "desc" },
         take: 1,
@@ -86,6 +88,7 @@ export async function listFinancialAccounts(
     paymentDueDay: r.paymentDueDay,
     institution: r.institution,
     trackHoldings: r.trackHoldings,
+    includeInCashFlow: r.includeInCashFlow,
     latestSnapshotAt: r.snapshots[0]?.takenAt ?? null
   }));
 }

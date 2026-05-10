@@ -1,5 +1,7 @@
 import { prisma } from "@/lib/db";
 import { listBudgets, type BudgetWithProgress } from "@/lib/money/budget-queries";
+import { buildForecastWithThreshold } from "@/lib/money/cashflow";
+import { computeDiscretionaryDaily } from "@/lib/money/discretionary";
 import { currentMonth, daysRemainingInMonth } from "@/lib/money/period";
 import { listBills } from "@/lib/money/bill-queries";
 import { nextExpectedSoon } from "@/lib/money/income-queries";
@@ -17,6 +19,12 @@ export type DashboardMoneySummary = {
   hasIncomeActivity: boolean;
   nextIncome: { name: string; amountCents: number; expectedAt: Date } | null;
   netWorth: { totalCents: number; deltaThisMonthCents: number } | null;
+  cashFlow: {
+    horizonDays: number;
+    netProjectedCents: number;
+    firstTightSpot: { at: Date; balanceCents: number } | null;
+    tightSpotCount: number;
+  } | null;
 };
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -39,7 +47,8 @@ export async function moneyDashboardSummary(
     incomeAggregate,
     activeIncomeCount,
     nextIncomeRow,
-    netWorth
+    netWorth,
+    cashFlow
   ] = await Promise.all([
     listBudgets(userId, timezone, now),
     prisma.transaction.groupBy({
@@ -74,7 +83,8 @@ export async function moneyDashboardSummary(
     }),
     prisma.incomeSource.count({ where: { userId, active: true } }),
     nextExpectedSoon(userId, 30, now),
-    netWorthDashboardSummary(userId, timezone, now)
+    netWorthDashboardSummary(userId, timezone, now),
+    buildCashFlowSummary(userId, timezone, now)
   ]);
 
   const limitByName = new Map(
@@ -143,6 +153,68 @@ export async function moneyDashboardSummary(
     net: { netCents, inCents, outCents },
     hasIncomeActivity,
     nextIncome,
-    netWorth
+    netWorth,
+    cashFlow
+  };
+}
+
+/**
+ * Cash-flow summary for the dashboard line. Loads user prefs + accounts +
+ * runs the forecast; returns null when the inputs aren't enough to render
+ * a meaningful line (no income source, or no cash-flow accounts).
+ */
+async function buildCashFlowSummary(
+  userId: string,
+  timezone: string,
+  now: Date
+): Promise<DashboardMoneySummary["cashFlow"]> {
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: {
+      cashFlowHorizonDays: true,
+      cashFlowTightThresholdCents: true,
+      cashFlowIncludeDiscretionary: true,
+      cashFlowDiscretionaryDailyCents: true
+    }
+  });
+  if (!user) return null;
+
+  const [accounts, incomeSourceCount] = await Promise.all([
+    prisma.financialAccount.findMany({
+      where: { userId, archived: false, includeInCashFlow: true },
+      select: { balanceCents: true, isLiability: true }
+    }),
+    prisma.incomeSource.count({ where: { userId, active: true } })
+  ]);
+
+  if (accounts.length === 0 || incomeSourceCount === 0) return null;
+
+  const startingBalanceCents = accounts.reduce(
+    (s, a) => s + (a.isLiability ? -a.balanceCents : a.balanceCents),
+    0
+  );
+
+  const discretionaryAuto = await computeDiscretionaryDaily(userId, 60, now);
+  const discretionaryDailyCents =
+    user.cashFlowDiscretionaryDailyCents ?? discretionaryAuto.cents;
+
+  const forecast = await buildForecastWithThreshold({
+    userId,
+    horizonDays: user.cashFlowHorizonDays,
+    startingBalanceCents,
+    includeDiscretionary: user.cashFlowIncludeDiscretionary,
+    discretionaryDailyCents: user.cashFlowIncludeDiscretionary ? discretionaryDailyCents : 0,
+    tightThresholdCents: user.cashFlowTightThresholdCents,
+    tz: timezone,
+    now
+  });
+
+  const netProjectedCents = forecast.events.reduce((s, e) => s + e.amountCents, 0);
+
+  return {
+    horizonDays: user.cashFlowHorizonDays,
+    netProjectedCents,
+    firstTightSpot: forecast.tightSpots[0] ?? null,
+    tightSpotCount: forecast.tightSpots.length
   };
 }

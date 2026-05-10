@@ -335,6 +335,8 @@ function buildDetailsPayload(values: AccountFormValues): Record<string, unknown>
       out.creditLimitCents = centsFromInput(values.creditLimit);
       out.statementDay = intFromString(values.statementDay);
       out.paymentDueDay = intFromString(values.paymentDueDay);
+      // 4K: credit feeds the cash-flow forecast via monthly payment too.
+      out.monthlyPaymentCents = centsFromInput(values.monthlyPayment);
       out.institution = values.institution?.trim() || null;
       break;
     case "loan":
@@ -343,6 +345,8 @@ function buildDetailsPayload(values: AccountFormValues): Record<string, unknown>
       out.monthlyPaymentCents = centsFromInput(values.monthlyPayment);
       out.loanTermMonths = intFromString(values.loanTermMonths);
       out.loanStartedAt = values.loanStartedAt?.trim() || null;
+      // 4K: loan needs paymentDueDay to participate in the cash-flow forecast.
+      out.paymentDueDay = intFromString(values.paymentDueDay);
       out.institution = values.institution?.trim() || null;
       break;
   }
@@ -477,20 +481,54 @@ function DetailsSection({
               )}
             />
           </div>
-          <FormField
-            control={form.control}
-            name="loanStartedAt"
-            render={({ field }) => (
-              <FormItem>
-                <FormLabel>Loan started on</FormLabel>
-                <FormControl>
-                  <Input type="date" {...field} />
-                </FormControl>
-                <FormMessage />
-              </FormItem>
-            )}
-          />
+          <div className="grid grid-cols-2 gap-3">
+            <FormField
+              control={form.control}
+              name="loanStartedAt"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>Loan started on</FormLabel>
+                  <FormControl>
+                    <Input type="date" {...field} />
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+            <FormField
+              control={form.control}
+              name="paymentDueDay"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>Payment due day</FormLabel>
+                  <FormControl>
+                    <Input type="number" min={1} max={31} placeholder="5" {...field} />
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+          </div>
         </>
+      )}
+
+      {type === "credit" && (
+        <FormField
+          control={form.control}
+          name="monthlyPayment"
+          render={({ field }) => (
+            <FormItem>
+              <FormLabel>Monthly payment (optional)</FormLabel>
+              <FormControl>
+                <Input inputMode="decimal" placeholder="50" {...field} />
+              </FormControl>
+              <p className="text-xs text-muted-foreground">
+                Used by the cash-flow forecast. Skip if you pay variable amounts.
+              </p>
+              <FormMessage />
+            </FormItem>
+          )}
+        />
       )}
 
       {(type === "investment" || type === "crypto") && mode === "create" && (

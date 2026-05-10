@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { format } from "date-fns";
-import { ArrowDown, ArrowUp, LineChart, Receipt, Target, Wallet } from "lucide-react";
+import { ArrowDown, ArrowUp, LineChart, Receipt, Target, TrendingDown, Wallet } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -235,6 +235,44 @@ export function MoneyThisMonthCard({
                           )}
                         </span>{" "}
                         this month
+                      </>
+                    )}
+                  </span>
+                </Link>
+              )}
+
+              {summary.cashFlow && (
+                <Link
+                  href="/money?tab=cashflow"
+                  onClick={(e) => e.stopPropagation()}
+                  className="flex items-center gap-2 rounded-md px-2 py-1.5 hover:bg-muted/60"
+                >
+                  <TrendingDown className="h-3.5 w-3.5 text-muted-foreground" aria-hidden />
+                  <span className="flex-1">
+                    Next {summary.cashFlow.horizonDays} days:{" "}
+                    {summary.cashFlow.netProjectedCents >= 0 ? (
+                      <ArrowUp className="inline h-3 w-3" aria-hidden />
+                    ) : (
+                      <ArrowDown className="inline h-3 w-3" aria-hidden />
+                    )}{" "}
+                    <span
+                      className={cn(
+                        "tabular-nums",
+                        summary.cashFlow.netProjectedCents < 0 &&
+                          "text-amber-700 dark:text-amber-400"
+                      )}
+                    >
+                      {formatCents(
+                        Math.abs(summary.cashFlow.netProjectedCents),
+                        currency
+                      )}
+                    </span>{" "}
+                    projected
+                    {summary.cashFlow.firstTightSpot && (
+                      <>
+                        {" "}· {summary.cashFlow.tightSpotCount} tight spot
+                        {summary.cashFlow.tightSpotCount === 1 ? "" : "s"} on{" "}
+                        {format(summary.cashFlow.firstTightSpot.at, "d MMM")}
                       </>
                     )}
                   </span>

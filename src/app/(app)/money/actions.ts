@@ -985,13 +985,21 @@ const DETAIL_FIELDS_BY_TYPE: Record<string, ReadonlyArray<keyof DetailFields>> =
   savings: ["rateBps", "institution"],
   investment: ["institution"],
   crypto: ["institution"],
-  credit: ["rateBps", "creditLimitCents", "statementDay", "paymentDueDay", "institution"],
+  credit: [
+    "rateBps",
+    "creditLimitCents",
+    "statementDay",
+    "paymentDueDay",
+    "monthlyPaymentCents", // expanded per 4K so credit feeds the cash-flow forecast
+    "institution"
+  ],
   loan: [
     "rateBps",
     "originalPrincipalCents",
     "monthlyPaymentCents",
     "loanTermMonths",
     "loanStartedAt",
+    "paymentDueDay", // expanded per 4K so loan feeds the cash-flow forecast
     "institution"
   ],
   other: ["institution"]
@@ -1071,6 +1079,11 @@ export async function createFinancialAccount(input: CreateFinancialAccountInput)
   const trackHoldings =
     data.trackHoldings === true && (data.type === "investment" || data.type === "crypto");
 
+  // Per-type seed for cash-flow inclusion (4K): cash + savings opt in by
+  // default, everything else opts out. User can override per-account from
+  // the Cash Flow tab.
+  const includeInCashFlow = data.type === "cash" || data.type === "savings";
+
   const created = await prisma.financialAccount.create({
     data: {
       userId: session.user.id,
@@ -1081,6 +1094,7 @@ export async function createFinancialAccount(input: CreateFinancialAccountInput)
       currency: data.currency,
       notes: data.notes?.trim() || null,
       trackHoldings,
+      includeInCashFlow,
       ...detailPatch,
       snapshots: {
         create: { balanceCents: data.balanceCents, takenAt: now }
@@ -1347,5 +1361,63 @@ export async function deleteHolding(id: string) {
   const holding = await requireOwnedHolding(id, session.user.id);
   await prisma.holding.delete({ where: { id } });
   await recomputeAccountFromHoldings(holding.accountId);
+  revalidate();
+}
+
+// ----- Cash flow preferences + per-account inclusion -----
+
+const cashFlowHorizonSchema = z.union([z.literal(30), z.literal(60), z.literal(90)]);
+
+const cashFlowDiscretionarySchema = z.object({
+  include: z.boolean().optional(),
+  dailyCentsOverride: z.number().int().nonnegative().nullable().optional()
+});
+
+export async function setCashFlowHorizon(days: number) {
+  const session = await requireSession();
+  const parsed = cashFlowHorizonSchema.parse(days);
+  await prisma.user.update({
+    where: { id: session.user.id },
+    data: { cashFlowHorizonDays: parsed }
+  });
+  revalidate();
+}
+
+export async function setCashFlowTightThreshold(cents: number) {
+  const session = await requireSession();
+  const parsed = z.number().int().nonnegative().parse(cents);
+  await prisma.user.update({
+    where: { id: session.user.id },
+    data: { cashFlowTightThresholdCents: parsed }
+  });
+  revalidate();
+}
+
+export async function setCashFlowDiscretionary(
+  input: z.infer<typeof cashFlowDiscretionarySchema>
+) {
+  const session = await requireSession();
+  const data = cashFlowDiscretionarySchema.parse(input);
+  await prisma.user.update({
+    where: { id: session.user.id },
+    data: {
+      ...(typeof data.include === "boolean" && {
+        cashFlowIncludeDiscretionary: data.include
+      }),
+      ...(typeof data.dailyCentsOverride !== "undefined" && {
+        cashFlowDiscretionaryDailyCents: data.dailyCentsOverride
+      })
+    }
+  });
+  revalidate();
+}
+
+export async function setIncludeInCashFlow(accountId: string, included: boolean) {
+  const session = await requireSession();
+  await requireOwnedFinancialAccount(accountId, session.user.id);
+  await prisma.financialAccount.update({
+    where: { id: accountId },
+    data: { includeInCashFlow: included }
+  });
   revalidate();
 }

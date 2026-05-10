@@ -7,6 +7,8 @@ import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { env } from "@/lib/env";
 import { listFinancialAccounts } from "@/lib/money/account-queries";
+import { buildForecastWithThreshold } from "@/lib/money/cashflow";
+import { computeDiscretionaryDaily } from "@/lib/money/discretionary";
 import { listAllHoldings } from "@/lib/money/holding-queries";
 import { listBills } from "@/lib/money/bill-queries";
 import { listBudgets } from "@/lib/money/budget-queries";
@@ -36,6 +38,7 @@ import { BillsAndSubsTab } from "@/app/(app)/money/_components/bills-and-subs/bi
 import { IncomeTab } from "@/app/(app)/money/_components/income/income-tab";
 import { GoalsTab } from "@/app/(app)/money/_components/goals/goals-tab";
 import { NetworthTab } from "@/app/(app)/money/_components/networth/networth-tab";
+import { CashFlowTab } from "@/app/(app)/money/_components/cashflow/cashflow-tab";
 
 export const dynamic = "force-dynamic";
 
@@ -54,6 +57,7 @@ function readTab(value: string | undefined): MoneyTab {
     value === "bills" ||
     value === "income" ||
     value === "goals" ||
+    value === "cashflow" ||
     value === "networth"
   )
     return value;
@@ -104,7 +108,13 @@ export default async function MoneyPage({
 
   const user = await prisma.user.findUnique({
     where: { id: session.user.id },
-    select: { timezone: true }
+    select: {
+      timezone: true,
+      cashFlowHorizonDays: true,
+      cashFlowTightThresholdCents: true,
+      cashFlowIncludeDiscretionary: true,
+      cashFlowDiscretionaryDailyCents: true
+    }
   });
   const tz = user?.timezone || env.DEFAULT_TIMEZONE;
   const currency = env.DEFAULT_CURRENCY;
@@ -174,6 +184,37 @@ export default async function MoneyPage({
   const deltaThisMonthCents =
     startOfMonthNet === null ? 0 : networth.totalCents - startOfMonthNet;
 
+  // Cash flow forecast inputs (4K)
+  const horizonDays = user?.cashFlowHorizonDays ?? 30;
+  const thresholdCents = user?.cashFlowTightThresholdCents ?? 10000;
+  const includeDiscretionary = user?.cashFlowIncludeDiscretionary ?? true;
+  const cashFlowAccounts = financialAccounts.filter(
+    (a) => !a.archived && a.includeInCashFlow
+  );
+  const startingBalanceCents = cashFlowAccounts.reduce(
+    (s, a) => s + (a.isLiability ? -a.balanceCents : a.balanceCents),
+    0
+  );
+  const discretionaryAuto = await computeDiscretionaryDaily(session.user.id, 60);
+  const discretionaryDailyCents =
+    user?.cashFlowDiscretionaryDailyCents ?? discretionaryAuto.cents;
+  const forecast = await buildForecastWithThreshold({
+    userId: session.user.id,
+    horizonDays,
+    startingBalanceCents,
+    includeDiscretionary,
+    discretionaryDailyCents: includeDiscretionary ? discretionaryDailyCents : 0,
+    tightThresholdCents: thresholdCents,
+    tz
+  });
+  const hasIncome = incomeSources.some((s) => s.active);
+  const hasOutflows =
+    bills.length > 0 ||
+    subscriptions.length > 0 ||
+    forecast.events.some(
+      (e) => e.kind === "loan_payment" || e.kind === "credit_payment"
+    );
+
   // Categories without an active budget — used by the budget-form picker.
   const budgetedNames = new Set(budgets.map((b) => b.name));
   const budgetCandidates = activeCategories
@@ -224,6 +265,21 @@ export default async function MoneyPage({
         }
         income={<IncomeTab sources={incomeSources} currency={currency} />}
         goals={<GoalsTab goals={goals} currency={currency} />}
+        cashflow={
+          <CashFlowTab
+            forecast={forecast}
+            accounts={financialAccounts}
+            startingBalanceCents={startingBalanceCents}
+            cashFlowAccountCount={cashFlowAccounts.length}
+            horizonDays={horizonDays}
+            thresholdCents={thresholdCents}
+            includeDiscretionary={includeDiscretionary}
+            discretionaryAuto={discretionaryAuto}
+            hasIncome={hasIncome}
+            hasOutflows={hasOutflows}
+            currency={currency}
+          />
+        }
         networth={
           <NetworthTab
             accounts={financialAccounts}
