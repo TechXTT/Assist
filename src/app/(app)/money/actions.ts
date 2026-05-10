@@ -8,6 +8,7 @@ import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { env } from "@/lib/env";
 import { nextDueAt } from "@/lib/money/bill-utils";
+import { nextDateForCadence } from "@/lib/money/income";
 import { advanceCycle } from "@/lib/money/subscription-utils";
 import {
   deleteRemindersForBill,
@@ -80,6 +81,31 @@ const addToGoalSchema = z.object({
   cents: z.number().int().positive("Save more than zero.")
 });
 
+const CADENCE = z.enum(["monthly", "biweekly", "weekly", "oneoff"]);
+
+const createIncomeSourceSchema = z
+  .object({
+    name: z.string().trim().min(1, "Give it a name.").max(60),
+    expectedAmountCents: z.number().int().positive("Set an amount above zero."),
+    currency: z.string().min(1).default(env.DEFAULT_CURRENCY),
+    cadence: CADENCE,
+    cadenceAnchorDay: z.number().int().min(1).max(31).optional().nullable(),
+    nextExpectedAt: z.string().min(1, "Pick a date."),
+    category: z.string().trim().max(40).default("Income"),
+    notes: z.string().trim().max(500).optional().nullable()
+  })
+  .refine(
+    (v) => (v.cadence === "monthly" ? typeof v.cadenceAnchorDay === "number" : true),
+    { message: "Pick a day of the month.", path: ["cadenceAnchorDay"] }
+  );
+
+const updateIncomeSourceSchema = createIncomeSourceSchema.innerType().partial();
+
+const markIncomeReceivedSchema = z.object({
+  actualAmountCents: z.number().int().positive().optional(),
+  receivedAt: z.string().optional()
+});
+
 const createTransactionSchema = z.object({
   amountCents: z.number().int(),
   currency: z.string().min(1).default(env.DEFAULT_CURRENCY),
@@ -99,6 +125,9 @@ export type CreateSubscriptionInput = z.infer<typeof createSubscriptionSchema>;
 export type UpdateSubscriptionInput = z.infer<typeof updateSubscriptionSchema>;
 export type CreateGoalInput = z.infer<typeof createGoalSchema>;
 export type UpdateGoalInput = z.infer<typeof updateGoalSchema>;
+export type CreateIncomeSourceInput = z.infer<typeof createIncomeSourceSchema>;
+export type UpdateIncomeSourceInput = z.infer<typeof updateIncomeSourceSchema>;
+export type MarkIncomeReceivedInput = z.infer<typeof markIncomeReceivedSchema>;
 export type CreateTransactionInput = z.infer<typeof createTransactionSchema>;
 export type UpdateTransactionInput = z.infer<typeof updateTransactionSchema>;
 
@@ -125,6 +154,24 @@ async function requireOwnedTransaction(id: string, userId: string) {
   });
   if (!tx || tx.userId !== userId) throw new Error("Transaction not found.");
   return tx;
+}
+
+async function requireOwnedIncomeSource(id: string, userId: string) {
+  const source = await prisma.incomeSource.findUnique({
+    where: { id },
+    select: {
+      id: true,
+      userId: true,
+      name: true,
+      expectedAmountCents: true,
+      currency: true,
+      cadence: true,
+      cadenceAnchorDay: true,
+      category: true
+    }
+  });
+  if (!source || source.userId !== userId) throw new Error("Income source not found.");
+  return source;
 }
 
 async function requireOwnedGoal(id: string, userId: string) {
@@ -677,5 +724,143 @@ export async function deleteGoal(id: string) {
   const session = await requireSession();
   await requireOwnedGoal(id, session.user.id);
   await prisma.savingsGoal.delete({ where: { id } });
+  revalidate();
+}
+
+// ----- Income sources -----
+
+function parseExpectedAt(input: string): Date {
+  const d = new Date(input);
+  if (Number.isNaN(d.getTime())) throw new Error("Invalid date.");
+  return d;
+}
+
+function parseOptionalDate(input: string | undefined | null): Date | null {
+  if (!input) return null;
+  const d = new Date(input);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+export async function createIncomeSource(input: CreateIncomeSourceInput) {
+  const session = await requireSession();
+  const data = createIncomeSourceSchema.parse(input);
+
+  const created = await prisma.incomeSource.create({
+    data: {
+      userId: session.user.id,
+      name: data.name,
+      expectedAmountCents: data.expectedAmountCents,
+      currency: data.currency,
+      cadence: data.cadence,
+      cadenceAnchorDay: data.cadence === "monthly" ? (data.cadenceAnchorDay ?? null) : null,
+      nextExpectedAt: parseExpectedAt(data.nextExpectedAt),
+      category: data.category?.trim() || "Income",
+      notes: data.notes?.trim() || null
+    }
+  });
+  revalidate();
+  return { id: created.id };
+}
+
+export async function updateIncomeSource(id: string, input: UpdateIncomeSourceInput) {
+  const session = await requireSession();
+  const data = updateIncomeSourceSchema.parse(input);
+  await requireOwnedIncomeSource(id, session.user.id);
+
+  const cadencePatch: Partial<{
+    cadence: string;
+    cadenceAnchorDay: number | null;
+  }> = {};
+  if (typeof data.cadence === "string") {
+    cadencePatch.cadence = data.cadence;
+    cadencePatch.cadenceAnchorDay =
+      data.cadence === "monthly" ? (data.cadenceAnchorDay ?? null) : null;
+  } else if (typeof data.cadenceAnchorDay !== "undefined") {
+    cadencePatch.cadenceAnchorDay = data.cadenceAnchorDay ?? null;
+  }
+
+  await prisma.incomeSource.update({
+    where: { id },
+    data: {
+      ...(typeof data.name === "string" && { name: data.name }),
+      ...(typeof data.expectedAmountCents === "number" && {
+        expectedAmountCents: data.expectedAmountCents
+      }),
+      ...(typeof data.currency === "string" && { currency: data.currency }),
+      ...cadencePatch,
+      ...(typeof data.nextExpectedAt === "string" && {
+        nextExpectedAt: parseExpectedAt(data.nextExpectedAt)
+      }),
+      ...(typeof data.category === "string" && {
+        category: data.category.trim() || "Income"
+      }),
+      ...(typeof data.notes !== "undefined" && { notes: data.notes?.trim() || null })
+    }
+  });
+  revalidate();
+}
+
+export async function archiveIncomeSource(id: string) {
+  const session = await requireSession();
+  await requireOwnedIncomeSource(id, session.user.id);
+  await prisma.incomeSource.update({ where: { id }, data: { active: false } });
+  revalidate();
+}
+
+export async function unarchiveIncomeSource(id: string) {
+  const session = await requireSession();
+  await requireOwnedIncomeSource(id, session.user.id);
+  await prisma.incomeSource.update({ where: { id }, data: { active: true } });
+  revalidate();
+}
+
+export async function markIncomeReceived(id: string, input: MarkIncomeReceivedInput = {}) {
+  const session = await requireSession();
+  const source = await requireOwnedIncomeSource(id, session.user.id);
+  const data = markIncomeReceivedSchema.parse(input);
+  const tz = await userTimezone(session.user.id);
+
+  const occurredAt = parseOptionalDate(data.receivedAt) ?? new Date();
+  const amountCents = Math.abs(data.actualAmountCents ?? source.expectedAmountCents);
+
+  const nextExpectedAt =
+    source.cadence === "oneoff"
+      ? null
+      : nextDateForCadence(occurredAt, source.cadence, source.cadenceAnchorDay ?? null, tz);
+
+  await prisma.$transaction([
+    prisma.transaction.create({
+      data: {
+        userId: session.user.id,
+        amountCents,
+        currency: source.currency,
+        description: source.name,
+        category: source.category,
+        occurredAt,
+        source: "income-source",
+        externalId: source.id
+      }
+    }),
+    prisma.incomeSource.update({
+      where: { id },
+      data: {
+        lastReceivedAt: occurredAt,
+        ...(source.cadence === "oneoff"
+          ? { active: false }
+          : nextExpectedAt
+            ? { nextExpectedAt }
+            : {})
+      }
+    })
+  ]);
+
+  revalidate();
+  return { amountCents, currency: source.currency, nextExpectedAt };
+}
+
+export async function deleteIncomeSource(id: string) {
+  const session = await requireSession();
+  await requireOwnedIncomeSource(id, session.user.id);
+  await prisma.incomeSource.delete({ where: { id } });
   revalidate();
 }

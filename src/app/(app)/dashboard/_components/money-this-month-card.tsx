@@ -2,12 +2,15 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Receipt, Target } from "lucide-react";
+import { format } from "date-fns";
+import { Receipt, Target, Wallet } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { formatCents } from "@/lib/money/format";
 import type { DashboardMoneySummary } from "@/lib/money/dashboard-summary";
+
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 function progressBarClass(spent: number, limit: number): string {
   if (limit <= 0) return "bg-stone-400";
@@ -18,6 +21,10 @@ function progressBarClass(spent: number, limit: number): string {
   return "bg-stone-400";
 }
 
+function daysFromNow(date: Date, now: Date = new Date()): number {
+  return Math.max(0, Math.round((date.getTime() - now.getTime()) / DAY_MS));
+}
+
 export function MoneyThisMonthCard({
   summary,
   currency
@@ -26,14 +33,21 @@ export function MoneyThisMonthCard({
   currency: string;
 }) {
   const router = useRouter();
+
+  const showNet =
+    summary.hasIncomeActivity || summary.nextIncome !== null;
+
   const hasData =
     summary.totalSpentCents > 0 ||
     summary.upcomingBills.count > 0 ||
-    summary.goals.count > 0;
+    summary.goals.count > 0 ||
+    showNet;
 
   function navigate() {
     router.push("/money");
   }
+
+  const netNegative = summary.net.netCents < 0;
 
   return (
     <Card
@@ -64,14 +78,34 @@ export function MoneyThisMonthCard({
         ) : (
           <>
             <div>
-              <p className="text-2xl font-semibold tabular-nums">
-                {formatCents(summary.totalSpentCents, currency)}
-              </p>
-              {summary.totalBudgetedCents > 0 && (
-                <p className="text-xs text-muted-foreground">
-                  of {formatCents(summary.totalBudgetedCents, currency)} budgeted across all
-                  categories
-                </p>
+              {showNet ? (
+                <>
+                  <p
+                    className={cn(
+                      "text-2xl font-semibold tabular-nums",
+                      netNegative && "text-amber-700 dark:text-amber-400"
+                    )}
+                  >
+                    {formatCents(summary.net.netCents, currency)}{" "}
+                    <span className="text-sm font-normal text-muted-foreground">net this month</span>
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    {formatCents(summary.net.inCents, currency)} in ·{" "}
+                    {formatCents(summary.net.outCents, currency)} out
+                  </p>
+                </>
+              ) : (
+                <>
+                  <p className="text-2xl font-semibold tabular-nums">
+                    {formatCents(summary.totalSpentCents, currency)}
+                  </p>
+                  {summary.totalBudgetedCents > 0 && (
+                    <p className="text-xs text-muted-foreground">
+                      of {formatCents(summary.totalBudgetedCents, currency)} budgeted across all
+                      categories
+                    </p>
+                  )}
+                </>
               )}
             </div>
 
@@ -126,14 +160,12 @@ export function MoneyThisMonthCard({
                     {summary.hotBudgets[0].daysRemaining === 1 ? "day" : "days"} to go.
                   </>
                 ) : (
-                  <>
-                    {summary.hotBudgets.length} budgets running hot.
-                  </>
+                  <>{summary.hotBudgets.length} budgets running hot.</>
                 )}
               </div>
             )}
 
-            <div className="grid gap-2 border-t pt-3 text-xs sm:grid-cols-2">
+            <div className="space-y-2 border-t pt-3 text-xs">
               <Link
                 href="/money?tab=bills"
                 onClick={(e) => e.stopPropagation()}
@@ -148,6 +180,27 @@ export function MoneyThisMonthCard({
                     : "No bills due in the next 7 days"}
                 </span>
               </Link>
+
+              {summary.nextIncome && (
+                <Link
+                  href="/money?tab=income"
+                  onClick={(e) => e.stopPropagation()}
+                  className="flex items-center gap-2 rounded-md px-2 py-1.5 hover:bg-muted/60"
+                >
+                  <Wallet className="h-3.5 w-3.5 text-muted-foreground" aria-hidden />
+                  <span className="flex-1">
+                    Next:{" "}
+                    <span className="font-medium">{summary.nextIncome.name}</span>{" "}
+                    in {daysFromNow(summary.nextIncome.expectedAt)}{" "}
+                    {daysFromNow(summary.nextIncome.expectedAt) === 1 ? "day" : "days"} ·{" "}
+                    {formatCents(summary.nextIncome.amountCents, currency)} expected
+                  </span>
+                  <span className="shrink-0 text-muted-foreground">
+                    {format(summary.nextIncome.expectedAt, "d MMM")}
+                  </span>
+                </Link>
+              )}
+
               <Link
                 href="/money?tab=goals"
                 onClick={(e) => e.stopPropagation()}

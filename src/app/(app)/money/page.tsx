@@ -10,10 +10,13 @@ import { listBills } from "@/lib/money/bill-queries";
 import { listBudgets } from "@/lib/money/budget-queries";
 import { listCategories } from "@/lib/money/category-queries";
 import { listGoals } from "@/lib/money/goal-queries";
+import { listIncomeSources } from "@/lib/money/income-queries";
 import { listSubscriptions } from "@/lib/money/subscription-queries";
 import {
   listTransactions,
-  monthlyBreakdown
+  monthlyBreakdown,
+  monthlyIncomeSummary,
+  type TransactionTypeFilter
 } from "@/lib/money/transaction-queries";
 import { currentMonth, customRange, lastMonth, type Range } from "@/lib/money/period";
 import {
@@ -23,6 +26,7 @@ import {
 import { SpendingTab } from "@/app/(app)/money/_components/spending/spending-tab";
 import { BudgetsTab } from "@/app/(app)/money/_components/budgets/budgets-tab";
 import { BillsAndSubsTab } from "@/app/(app)/money/_components/bills-and-subs/bills-and-subs-tab";
+import { IncomeTab } from "@/app/(app)/money/_components/income/income-tab";
 import { GoalsTab } from "@/app/(app)/money/_components/goals/goals-tab";
 
 export const dynamic = "force-dynamic";
@@ -33,16 +37,28 @@ type SearchParams = {
   from?: string;
   to?: string;
   categories?: string;
+  type?: string;
 };
 
 function readTab(value: string | undefined): MoneyTab {
-  if (value === "budgets" || value === "bills" || value === "goals") return value;
+  if (
+    value === "budgets" ||
+    value === "bills" ||
+    value === "income" ||
+    value === "goals"
+  )
+    return value;
   return "spending";
 }
 
 function readPeriod(value: string | undefined): "this" | "last" | "custom" {
   if (value === "last" || value === "custom") return value;
   return "this";
+}
+
+function readType(value: string | undefined): TransactionTypeFilter {
+  if (value === "all" || value === "income") return value;
+  return "expenses";
 }
 
 function defaultDateInput(d: Date, tz: string): string {
@@ -86,7 +102,9 @@ export default async function MoneyPage({
 
   const tab = readTab(searchParams.tab);
   const period = readPeriod(searchParams.period);
+  const type = readType(searchParams.type);
   const { range, from, to } = resolveRange(period, searchParams.from, searchParams.to, tz);
+  const month = currentMonth(tz);
 
   const selectedCategoryNames = (searchParams.categories ?? "")
     .split(",")
@@ -101,20 +119,25 @@ export default async function MoneyPage({
     budgets,
     bills,
     subscriptions,
-    goals
+    goals,
+    incomeSources,
+    incomeMonth
   ] = await Promise.all([
     listCategories(session.user.id, { includeArchived: false }),
     listCategories(session.user.id, { includeArchived: true }),
     listTransactions(session.user.id, {
       from: range.start,
       to: range.end,
-      categoryNames: selectedCategoryNames.length > 0 ? selectedCategoryNames : undefined
+      categoryNames: selectedCategoryNames.length > 0 ? selectedCategoryNames : undefined,
+      type
     }),
     monthlyBreakdown(session.user.id, tz),
     listBudgets(session.user.id, tz),
     listBills(session.user.id, tz),
     listSubscriptions(session.user.id),
-    listGoals(session.user.id, { includeArchived: true })
+    listGoals(session.user.id, { includeArchived: true }),
+    listIncomeSources(session.user.id, { includeArchived: true }),
+    monthlyIncomeSummary(session.user.id, month.start, month.end)
   ]);
 
   // Categories without an active budget — used by the budget-form picker.
@@ -145,6 +168,9 @@ export default async function MoneyPage({
             from={from}
             to={to}
             selectedCategoryNames={selectedCategoryNames}
+            type={type}
+            incomeMonthCount={incomeMonth.count}
+            incomeMonthTotalCents={incomeMonth.totalCents}
           />
         }
         budgets={
@@ -162,6 +188,7 @@ export default async function MoneyPage({
             currency={currency}
           />
         }
+        income={<IncomeTab sources={incomeSources} currency={currency} />}
         goals={<GoalsTab goals={goals} currency={currency} />}
       />
     </div>

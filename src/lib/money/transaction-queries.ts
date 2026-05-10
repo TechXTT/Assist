@@ -12,9 +12,22 @@ export type TransactionRow = {
   source: string;
 };
 
+export type TransactionTypeFilter = "all" | "expenses" | "income";
+
+function signFilter(type: TransactionTypeFilter | undefined) {
+  if (type === "expenses") return { amountCents: { lt: 0 } };
+  if (type === "income") return { amountCents: { gt: 0 } };
+  return {};
+}
+
 export async function listTransactions(
   userId: string,
-  opts: { from: Date; to: Date; categoryNames?: string[] }
+  opts: {
+    from: Date;
+    to: Date;
+    categoryNames?: string[];
+    type?: TransactionTypeFilter;
+  }
 ): Promise<TransactionRow[]> {
   return prisma.transaction.findMany({
     where: {
@@ -22,7 +35,8 @@ export async function listTransactions(
       occurredAt: { gte: opts.from, lte: opts.to },
       ...(opts.categoryNames && opts.categoryNames.length > 0
         ? { category: { in: opts.categoryNames } }
-        : {})
+        : {}),
+      ...signFilter(opts.type)
     },
     orderBy: { occurredAt: "desc" },
     select: {
@@ -35,6 +49,31 @@ export async function listTransactions(
       source: true
     }
   });
+}
+
+/**
+ * Aggregate of positive-amount transactions in the current calendar month —
+ * used for the Spending tab's "+ N income transactions this month" hint and
+ * the Income view's "Received €X" caption.
+ */
+export async function monthlyIncomeSummary(
+  userId: string,
+  monthStart: Date,
+  monthEnd: Date
+): Promise<{ count: number; totalCents: number }> {
+  const result = await prisma.transaction.aggregate({
+    where: {
+      userId,
+      amountCents: { gt: 0 },
+      occurredAt: { gte: monthStart, lte: monthEnd }
+    },
+    _sum: { amountCents: true },
+    _count: true
+  });
+  return {
+    count: result._count ?? 0,
+    totalCents: result._sum.amountCents ?? 0
+  };
 }
 
 export type CategoryBreakdown = {

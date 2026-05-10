@@ -2,6 +2,7 @@ import { prisma } from "@/lib/db";
 import { listBudgets, type BudgetWithProgress } from "@/lib/money/budget-queries";
 import { currentMonth, daysRemainingInMonth } from "@/lib/money/period";
 import { listBills } from "@/lib/money/bill-queries";
+import { nextExpectedSoon } from "@/lib/money/income-queries";
 
 export type DashboardMoneySummary = {
   totalSpentCents: number;
@@ -11,6 +12,9 @@ export type DashboardMoneySummary = {
   goals: { savedCents: number; targetCents: number; count: number };
   hotBudgets: BudgetWithProgress[];
   daysRemaining: number;
+  net: { netCents: number; inCents: number; outCents: number };
+  hasIncomeActivity: boolean;
+  nextIncome: { name: string; amountCents: number; expectedAt: Date } | null;
 };
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -24,7 +28,16 @@ export async function moneyDashboardSummary(
   const month = currentMonth(timezone, now);
   const horizon7 = new Date(now.getTime() + 7 * DAY_MS);
 
-  const [budgets, monthSpend, bills, goals] = await Promise.all([
+  const [
+    budgets,
+    monthSpend,
+    bills,
+    goals,
+    netAggregate,
+    incomeAggregate,
+    activeIncomeCount,
+    nextIncomeRow
+  ] = await Promise.all([
     listBudgets(userId, timezone, now),
     prisma.transaction.groupBy({
       by: ["category"],
@@ -39,7 +52,25 @@ export async function moneyDashboardSummary(
     prisma.savingsGoal.findMany({
       where: { userId, archived: false },
       select: { savedCents: true, targetCents: true }
-    })
+    }),
+    prisma.transaction.aggregate({
+      where: {
+        userId,
+        occurredAt: { gte: month.start, lte: month.end }
+      },
+      _sum: { amountCents: true }
+    }),
+    prisma.transaction.aggregate({
+      where: {
+        userId,
+        amountCents: { gt: 0 },
+        occurredAt: { gte: month.start, lte: month.end }
+      },
+      _sum: { amountCents: true },
+      _count: true
+    }),
+    prisma.incomeSource.count({ where: { userId, active: true } }),
+    nextExpectedSoon(userId, 30, now)
   ]);
 
   const limitByName = new Map(
@@ -82,6 +113,21 @@ export async function moneyDashboardSummary(
 
   const hotBudgets = budgets.filter((b) => b.percentUsed > 80 && b.daysRemaining > 7);
 
+  const inCents = incomeAggregate._sum.amountCents ?? 0;
+  const netCents = netAggregate._sum.amountCents ?? 0;
+  const outCents = inCents - netCents; // positive = absolute expense
+
+  const hasIncomeActivity =
+    activeIncomeCount > 0 || (incomeAggregate._count ?? 0) > 0;
+
+  const nextIncome = nextIncomeRow
+    ? {
+        name: nextIncomeRow.name,
+        amountCents: nextIncomeRow.expectedAmountCents,
+        expectedAt: nextIncomeRow.nextExpectedAt
+      }
+    : null;
+
   return {
     totalSpentCents,
     totalBudgetedCents,
@@ -89,7 +135,9 @@ export async function moneyDashboardSummary(
     upcomingBills,
     goals: goalsSummary,
     hotBudgets,
-    daysRemaining: daysRemainingInMonth(timezone, now)
+    daysRemaining: daysRemainingInMonth(timezone, now),
+    net: { netCents, inCents, outCents },
+    hasIncomeActivity,
+    nextIncome
   };
 }
-

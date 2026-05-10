@@ -32,6 +32,7 @@ model User {
   calendarEvents   CalendarEvent[]
   bills            Bill[]
   subscriptions    Subscription[]
+  incomeSources    IncomeSource[]
   transactions     Transaction[]
   budgetCategories BudgetCategory[]
   savingsGoals     SavingsGoal[]
@@ -182,6 +183,28 @@ model Subscription {
   source               String    @default("manual")
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model IncomeSource {
+  id                  String    @id @default(cuid())
+  userId              String
+  name                String
+  expectedAmountCents Int
+  currency            String    @default("EUR")
+  cadence             String
+  cadenceAnchorDay    Int?
+  nextExpectedAt      DateTime
+  category            String    @default("Income")
+  source              String    @default("manual")
+  active              Boolean   @default(true)
+  lastReceivedAt      DateTime?
+  notes               String?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, active, nextExpectedAt])
 }
 
 model Transaction {

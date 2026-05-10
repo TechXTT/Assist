@@ -17,19 +17,22 @@ import {
 import type { CategoryRow } from "@/lib/money/category-queries";
 
 type Period = "this" | "last" | "custom";
+type Type = "all" | "expenses" | "income";
 
 export function TransactionFilters({
   period,
   from,
   to,
   selectedCategoryNames,
-  categories
+  categories,
+  type
 }: {
   period: Period;
   from: string;
   to: string;
   selectedCategoryNames: string[];
   categories: CategoryRow[];
+  type: Type;
 }) {
   const router = useRouter();
   const pathname = usePathname();
@@ -60,8 +63,29 @@ export function TransactionFilters({
     update({ categories: next.size === 0 ? undefined : Array.from(next).join(",") });
   }
 
+  function setType(next: Type) {
+    update({ type: next === "expenses" ? undefined : next });
+  }
+
   return (
     <div className="flex flex-wrap items-end gap-2">
+      <div className="inline-flex rounded-md border bg-background p-0.5">
+        {(["all", "expenses", "income"] as Type[]).map((t) => (
+          <button
+            key={t}
+            type="button"
+            onClick={() => setType(t)}
+            className={cn(
+              "rounded px-3 py-1 text-xs font-medium transition-colors capitalize",
+              type === t
+                ? "bg-foreground text-background"
+                : "text-muted-foreground hover:bg-muted"
+            )}
+          >
+            {t === "all" ? "All" : t === "expenses" ? "Expenses" : "Income"}
+          </button>
+        ))}
+      </div>
       <div className="inline-flex rounded-md border bg-background p-0.5">
         {(["this", "last", "custom"] as Period[]).map((p) => (
           <button
