@@ -29,6 +29,14 @@ model User {
   cashFlowIncludeDiscretionary    Boolean   @default(true)
   cashFlowDiscretionaryDailyCents Int?
 
+  // Health prefs
+  weeklyExerciseTargetMinutes Int       @default(90)
+  sleepTargetHours            Float?
+  targetBedtime               String?
+  windDownEnabled             Boolean   @default(false)
+  windDownMinutesBefore       Int       @default(30)
+  lastWindDownDismissedOn     DateTime?
+
   accounts          Account[]
   sessions          Session[]
   tasks             Task[]
@@ -43,6 +51,7 @@ model User {
   savingsGoals      SavingsGoal[]
   habitLogs         HabitLog[]
   exercisePlans     ExercisePlan[]
+  exerciseSessions  ExerciseSession[]
   reminders         Reminder[]
 }
 
@@ -359,6 +368,20 @@ model ExercisePlan {
   days                String
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model ExerciseSession {
+  id         String   @id @default(cuid())
+  userId     String
+  activity   String
+  minutes    Int
+  occurredAt DateTime
+  notes      String?
+  createdAt  DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, occurredAt])
 }
 
 // ----- Reminders (deadline pressure engine) -----

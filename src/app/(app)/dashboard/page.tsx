@@ -11,8 +11,8 @@ import { populateTinyFirstSteps } from "@/lib/tasks/tiny-first-step";
 import { listActiveReminders } from "@/lib/reminders/active";
 import { maybeSyncCalendar } from "@/lib/google/sync";
 import { moneyDashboardSummary } from "@/lib/money/dashboard-summary";
+import { buildHealthThisWeek, checkWindDown } from "@/lib/health/dashboard-summary";
 import { ReminderBanners } from "@/components/reminder-banners";
-import { PlaceholderCard } from "@/components/placeholder-card";
 import {
   TodayCard,
   type TodayItem
@@ -20,6 +20,8 @@ import {
 import { DeadlinesCard } from "@/app/(app)/dashboard/_components/deadlines-card";
 import { ReauthBanner } from "@/app/(app)/dashboard/_components/reauth-banner";
 import { MoneyThisMonthCard } from "@/app/(app)/dashboard/_components/money-this-month-card";
+import { HealthThisWeekCard } from "@/app/(app)/dashboard/_components/health-this-week-card";
+import { WindDownBanner } from "@/app/(app)/dashboard/_components/wind-down-banner";
 
 export const dynamic = "force-dynamic";
 
@@ -56,31 +58,40 @@ export default async function DashboardPage() {
   // Trigger sync first (read-on-demand). Branches the rest of the render.
   const syncResult = await maybeSyncCalendar(userId);
 
-  const [todayTasks, weekTasks, activeReminders, todayEvents, moneySummary] =
-    await Promise.all([
-      listTodayTasks(userId, start, end),
-      listWeekDeadlines(userId),
-      listActiveReminders(userId),
-      prisma.calendarEvent.findMany({
-        where: {
-          userId,
-          status: { not: "cancelled" },
-          startsAt: { lt: end },
-          endsAt: { gt: start }
-        },
-        orderBy: { startsAt: "asc" },
-        select: {
-          id: true,
-          title: true,
-          startsAt: true,
-          endsAt: true,
-          allDay: true,
-          location: true,
-          htmlLink: true
-        }
-      }),
-      moneyDashboardSummary(userId, tz, env.DEFAULT_CURRENCY)
-    ]);
+  const [
+    todayTasks,
+    weekTasks,
+    activeReminders,
+    todayEvents,
+    moneySummary,
+    healthSummary,
+    windDownMinutes
+  ] = await Promise.all([
+    listTodayTasks(userId, start, end),
+    listWeekDeadlines(userId),
+    listActiveReminders(userId),
+    prisma.calendarEvent.findMany({
+      where: {
+        userId,
+        status: { not: "cancelled" },
+        startsAt: { lt: end },
+        endsAt: { gt: start }
+      },
+      orderBy: { startsAt: "asc" },
+      select: {
+        id: true,
+        title: true,
+        startsAt: true,
+        endsAt: true,
+        allDay: true,
+        location: true,
+        htmlLink: true
+      }
+    }),
+    moneyDashboardSummary(userId, tz, env.DEFAULT_CURRENCY),
+    buildHealthThisWeek(userId, tz),
+    checkWindDown(userId, tz)
+  ]);
 
   const tinyMap = await populateTinyFirstSteps(
     weekTasks.map((t) => ({
@@ -127,6 +138,8 @@ export default async function DashboardPage() {
         </p>
       )}
 
+      {windDownMinutes !== null && <WindDownBanner minutesRemaining={windDownMinutes} />}
+
       <ReminderBanners reminders={activeReminders} />
 
       <div className="grid gap-4 md:grid-cols-2">
@@ -146,10 +159,7 @@ export default async function DashboardPage() {
 
       <div className="grid gap-4 md:grid-cols-2">
         <MoneyThisMonthCard summary={moneySummary} currency={env.DEFAULT_CURRENCY} />
-        <PlaceholderCard
-          title="Health this week"
-          description="Sleep average, exercise minutes, and a mood mini-trendline. Lands in Phase 5."
-        />
+        <HealthThisWeekCard summary={healthSummary} />
       </div>
     </div>
   );
