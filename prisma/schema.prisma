@@ -148,34 +148,38 @@ model CalendarEvent {
 // ----- Money -----
 
 model Bill {
-  id          String    @id @default(cuid())
-  userId      String
-  name        String
-  amountCents Int
-  currency    String    @default("EUR")
-  dueDay      Int?
-  dueDate     DateTime?
-  recurring   Boolean   @default(true)
-  category    String?
-  lastPaidAt  DateTime?
-  source      String    @default("manual")
-  externalId  String?
+  id              String    @id @default(cuid())
+  userId          String
+  name            String
+  amountCents     Int
+  currency        String    @default("EUR")
+  dueDay          Int?
+  dueDate         DateTime?
+  recurring       Boolean   @default(true)
+  category        String?
+  lastPaidAt      DateTime?
+  reminderEnabled Boolean   @default(true)
+  notes           String?
+  source          String    @default("manual")
+  externalId      String?
 
   user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
   reminders Reminder[]
 }
 
 model Subscription {
-  id              String   @id @default(cuid())
-  userId          String
-  name            String
-  amountCents     Int
-  currency        String   @default("EUR")
-  billingCycle    String
-  nextChargeAt    DateTime
-  category        String?
-  suspectedUnused Boolean  @default(false)
-  source          String   @default("manual")
+  id                   String    @id @default(cuid())
+  userId               String
+  name                 String
+  amountCents          Int
+  currency             String    @default("EUR")
+  billingCycle         String
+  nextChargeAt         DateTime
+  category             String?
+  suspectedUnused      Boolean   @default(false)
+  userMarkedUnused     Boolean   @default(false)
+  lastReminderShownAt  DateTime?
+  source               String    @default("manual")
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
@@ -197,11 +201,12 @@ model Transaction {
 }
 
 model BudgetCategory {
-  id                String @id @default(cuid())
+  id                String  @id @default(cuid())
   userId            String
   name              String
   monthlyLimitCents Int
-  color             String @default("#7c9885")
+  color             String  @default("#7c9885")
+  archived          Boolean @default(false)
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
@@ -216,6 +221,7 @@ model SavingsGoal {
   savedCents  Int       @default(0)
   targetDate  DateTime?
   notes       String?
+  archived    Boolean   @default(false)
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
