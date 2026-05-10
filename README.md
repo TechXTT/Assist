@@ -32,3 +32,7 @@ Sign-in is gated to the email in `ALLOWED_EMAIL`. Other accounts are rejected.
 - `npm run typecheck` — `tsc --noEmit`
 - `npm run db:migrate` — Prisma migrate dev
 - `npm run db:studio` — Prisma Studio
+
+## Deferred work
+
+- **Phase 4G — Gmail receipt scan**: deferred, will revisit after Phase 5+ once we have real receipt samples to tune the parser against. Specced in `phase-4-brief.md` §4G; not implemented.
