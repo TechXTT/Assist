@@ -10,7 +10,7 @@ import { env } from "@/lib/env";
 import {
   deleteRemindersForTask,
   upsertRemindersForTask
-} from "@/lib/tasks/reminders";
+} from "@/lib/reminders/tasks";
 
 const PRIORITY = z.enum(["low", "med", "high"]);
 const STATUS = z.enum(["todo", "doing", "done"]);

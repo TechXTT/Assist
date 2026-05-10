@@ -7,6 +7,11 @@ import { z } from "zod";
 import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { env } from "@/lib/env";
+import { nextDueAt } from "@/lib/money/bill-utils";
+import {
+  deleteRemindersForBill,
+  upsertReminderForBill
+} from "@/lib/reminders/bills";
 
 const HEX_COLOR = /^#[0-9a-fA-F]{6}$/;
 
@@ -31,6 +36,25 @@ const updateBudgetSchema = z.object({
   monthlyLimitCents: z.number().int().positive("Set a limit above zero.").optional()
 });
 
+const createBillSchema = z
+  .object({
+    name: z.string().trim().min(1, "Give it a name.").max(60),
+    amountCents: z.number().int().positive("Set an amount above zero."),
+    currency: z.string().min(1).default(env.DEFAULT_CURRENCY),
+    category: z.string().trim().max(40).optional().nullable(),
+    recurring: z.boolean(),
+    dueDay: z.number().int().min(1).max(31).optional().nullable(),
+    dueDate: z.string().optional().nullable(), // ISO date-only or datetime
+    reminderEnabled: z.boolean().default(true),
+    notes: z.string().trim().max(500).optional().nullable()
+  })
+  .refine(
+    (v) => (v.recurring ? typeof v.dueDay === "number" : Boolean(v.dueDate)),
+    { message: "Pick a due day or due date." }
+  );
+
+const updateBillSchema = createBillSchema.innerType().partial();
+
 const createTransactionSchema = z.object({
   amountCents: z.number().int(),
   currency: z.string().min(1).default(env.DEFAULT_CURRENCY),
@@ -44,6 +68,8 @@ const updateTransactionSchema = createTransactionSchema.partial();
 export type CreateCategoryInput = z.infer<typeof createCategorySchema>;
 export type CreateBudgetInput = z.infer<typeof createBudgetSchema>;
 export type UpdateBudgetInput = z.infer<typeof updateBudgetSchema>;
+export type CreateBillInput = z.infer<typeof createBillSchema>;
+export type UpdateBillInput = z.infer<typeof updateBillSchema>;
 export type CreateTransactionInput = z.infer<typeof createTransactionSchema>;
 export type UpdateTransactionInput = z.infer<typeof updateTransactionSchema>;
 
@@ -70,6 +96,23 @@ async function requireOwnedTransaction(id: string, userId: string) {
   });
   if (!tx || tx.userId !== userId) throw new Error("Transaction not found.");
   return tx;
+}
+
+async function requireOwnedBill(id: string, userId: string) {
+  const bill = await prisma.bill.findUnique({
+    where: { id },
+    select: {
+      id: true,
+      userId: true,
+      recurring: true,
+      dueDay: true,
+      dueDate: true,
+      lastPaidAt: true,
+      reminderEnabled: true
+    }
+  });
+  if (!bill || bill.userId !== userId) throw new Error("Bill not found.");
+  return bill;
 }
 
 function revalidate() {
@@ -281,5 +324,131 @@ export async function deleteTransaction(id: string) {
   const session = await requireSession();
   await requireOwnedTransaction(id, session.user.id);
   await prisma.transaction.delete({ where: { id } });
+  revalidate();
+}
+
+// ----- Bills -----
+
+function parseDueDate(input: string | null | undefined): Date | null {
+  if (!input) return null;
+  const d = new Date(input);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+async function regenerateBillReminder(billId: string, userId: string, timezone: string) {
+  await deleteRemindersForBill(billId);
+  const bill = await prisma.bill.findUnique({
+    where: { id: billId },
+    select: {
+      reminderEnabled: true,
+      recurring: true,
+      dueDay: true,
+      dueDate: true,
+      lastPaidAt: true
+    }
+  });
+  if (!bill || !bill.reminderEnabled) return;
+  const due = nextDueAt(bill, timezone);
+  if (!due) return;
+  await upsertReminderForBill(billId, userId, due);
+}
+
+async function userTimezone(userId: string): Promise<string> {
+  const u = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { timezone: true }
+  });
+  return u?.timezone || env.DEFAULT_TIMEZONE;
+}
+
+export async function createBill(input: CreateBillInput) {
+  const session = await requireSession();
+  const data = createBillSchema.parse(input);
+  const tz = await userTimezone(session.user.id);
+
+  const created = await prisma.bill.create({
+    data: {
+      userId: session.user.id,
+      name: data.name,
+      amountCents: data.amountCents,
+      currency: data.currency,
+      category: data.category?.trim() || null,
+      recurring: data.recurring,
+      dueDay: data.recurring ? (data.dueDay ?? null) : null,
+      dueDate: !data.recurring ? parseDueDate(data.dueDate) : null,
+      reminderEnabled: data.reminderEnabled,
+      notes: data.notes?.trim() || null,
+      source: "manual"
+    }
+  });
+
+  await regenerateBillReminder(created.id, session.user.id, tz);
+  revalidate();
+  return { id: created.id };
+}
+
+export async function updateBill(id: string, input: UpdateBillInput) {
+  const session = await requireSession();
+  const data = updateBillSchema.parse(input);
+  await requireOwnedBill(id, session.user.id);
+  const tz = await userTimezone(session.user.id);
+
+  const recurringPatch: Partial<{
+    recurring: boolean;
+    dueDay: number | null;
+    dueDate: Date | null;
+  }> = {};
+  if (typeof data.recurring === "boolean") {
+    recurringPatch.recurring = data.recurring;
+    recurringPatch.dueDay = data.recurring ? (data.dueDay ?? null) : null;
+    recurringPatch.dueDate = !data.recurring ? parseDueDate(data.dueDate ?? null) : null;
+  } else {
+    if (typeof data.dueDay !== "undefined") recurringPatch.dueDay = data.dueDay ?? null;
+    if (typeof data.dueDate !== "undefined")
+      recurringPatch.dueDate = parseDueDate(data.dueDate ?? null);
+  }
+
+  await prisma.bill.update({
+    where: { id },
+    data: {
+      ...(typeof data.name === "string" && { name: data.name }),
+      ...(typeof data.amountCents === "number" && { amountCents: data.amountCents }),
+      ...(typeof data.currency === "string" && { currency: data.currency }),
+      ...(typeof data.category !== "undefined" && {
+        category: data.category?.trim() || null
+      }),
+      ...recurringPatch,
+      ...(typeof data.reminderEnabled === "boolean" && {
+        reminderEnabled: data.reminderEnabled
+      }),
+      ...(typeof data.notes !== "undefined" && { notes: data.notes?.trim() || null })
+    }
+  });
+
+  await regenerateBillReminder(id, session.user.id, tz);
+  revalidate();
+}
+
+export async function markBillPaid(id: string) {
+  const session = await requireSession();
+  await requireOwnedBill(id, session.user.id);
+  const tz = await userTimezone(session.user.id);
+
+  await prisma.bill.update({
+    where: { id },
+    data: { lastPaidAt: new Date() }
+  });
+
+  // Pending reminders point at the cycle that just ended; clear and regenerate
+  // for the next cycle (recurring) or just clear (one-off).
+  await regenerateBillReminder(id, session.user.id, tz);
+  revalidate();
+}
+
+export async function deleteBill(id: string) {
+  const session = await requireSession();
+  await requireOwnedBill(id, session.user.id);
+  await deleteRemindersForBill(id);
+  await prisma.bill.delete({ where: { id } });
   revalidate();
 }

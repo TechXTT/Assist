@@ -4,7 +4,7 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { listAllTasks } from "@/lib/tasks/task-queries";
 import { populateTinyFirstSteps } from "@/lib/tasks/tiny-first-step";
-import { listActiveReminders } from "@/lib/tasks/reminders";
+import { listActiveReminders } from "@/lib/reminders/active";
 import { ReminderBanners } from "@/components/reminder-banners";
 import { AddTaskButton } from "@/app/(app)/tasks/_components/add-task-button";
 import { TasksView } from "@/app/(app)/tasks/_components/tasks-view";
@@ -56,14 +56,7 @@ export default async function TasksPage() {
         <AddTaskButton />
       </div>
 
-      <ReminderBanners
-        reminders={activeReminders.map((r) => ({
-          id: r.id,
-          level: r.level,
-          fireAt: r.fireAt,
-          task: { id: r.task.id, title: r.task.title, dueAt: r.task.dueAt }
-        }))}
-      />
+      <ReminderBanners reminders={activeReminders} />
 
       {hasAny ? (
         <TasksView tasks={view} />

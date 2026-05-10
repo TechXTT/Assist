@@ -8,7 +8,7 @@ import { prisma } from "@/lib/db";
 import { env } from "@/lib/env";
 import { listTodayTasks, listWeekDeadlines } from "@/lib/tasks/task-queries";
 import { populateTinyFirstSteps } from "@/lib/tasks/tiny-first-step";
-import { listActiveReminders } from "@/lib/tasks/reminders";
+import { listActiveReminders } from "@/lib/reminders/active";
 import { maybeSyncCalendar } from "@/lib/google/sync";
 import { ReminderBanners } from "@/components/reminder-banners";
 import { PlaceholderCard } from "@/components/placeholder-card";
@@ -123,14 +123,7 @@ export default async function DashboardPage() {
         </p>
       )}
 
-      <ReminderBanners
-        reminders={activeReminders.map((r) => ({
-          id: r.id,
-          level: r.level,
-          fireAt: r.fireAt,
-          task: { id: r.task.id, title: r.task.title, dueAt: r.task.dueAt }
-        }))}
-      />
+      <ReminderBanners reminders={activeReminders} />
 
       <div className="grid gap-4 md:grid-cols-2">
         <TodayCard items={todayItems} />
