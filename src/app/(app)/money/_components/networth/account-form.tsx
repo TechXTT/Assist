@@ -28,6 +28,7 @@ import {
 } from "@/lib/money/account-type-meta";
 import {
   createFinancialAccount,
+  updateAccountDetails,
   updateFinancialAccount
 } from "@/app/(app)/money/actions";
 
@@ -46,7 +47,19 @@ const formSchema = z.object({
       },
       "That doesn't look like a number."
     ),
-  notes: z.string().max(500).optional()
+  notes: z.string().max(500).optional(),
+
+  // Detail fields — all optional strings, parsed on submit.
+  rate: z.string().optional(), // percentage, e.g. "4.5"
+  institution: z.string().max(80).optional(),
+  trackHoldings: z.boolean().optional(),
+  creditLimit: z.string().optional(),
+  statementDay: z.string().optional(),
+  paymentDueDay: z.string().optional(),
+  originalPrincipal: z.string().optional(),
+  monthlyPayment: z.string().optional(),
+  loanTermMonths: z.string().optional(),
+  loanStartedAt: z.string().optional()
 });
 
 export type AccountFormValues = z.infer<typeof formSchema>;
@@ -67,6 +80,25 @@ type Props =
       accountId: string;
     };
 
+function bpsFromPercent(input: string | undefined): number | null {
+  if (!input || !input.trim()) return null;
+  const n = Number.parseFloat(input.replace(",", "."));
+  if (!Number.isFinite(n) || n < 0) return null;
+  return Math.round(n * 100); // 4.5% → 450 bps
+}
+
+function intFromString(input: string | undefined): number | null {
+  if (!input || !input.trim()) return null;
+  const n = Number.parseInt(input, 10);
+  return Number.isFinite(n) && n >= 0 ? n : null;
+}
+
+function centsFromInput(input: string | undefined): number | null {
+  if (!input || !input.trim()) return null;
+  const c = parseCentsInput(input);
+  return c !== null && c >= 0 ? c : null;
+}
+
 export function AccountForm(props: Props) {
   const [submitting, setSubmitting] = useState(false);
   const [touchedLiability, setTouchedLiability] = useState(false);
@@ -81,14 +113,22 @@ export function AccountForm(props: Props) {
             type: "cash",
             isLiability: ACCOUNT_TYPE_META.cash.defaultLiability,
             startingBalance: "",
-            notes: ""
+            notes: "",
+            rate: "",
+            institution: "",
+            trackHoldings: false,
+            creditLimit: "",
+            statementDay: "",
+            paymentDueDay: "",
+            originalPrincipal: "",
+            monthlyPayment: "",
+            loanTermMonths: "",
+            loanStartedAt: ""
           }
   });
 
   const watchedType = form.watch("type");
 
-  // When type changes (and the user hasn't manually set isLiability), apply
-  // the type's default liability flag.
   useEffect(() => {
     if (touchedLiability) return;
     form.setValue("isLiability", ACCOUNT_TYPE_META[watchedType].defaultLiability);
@@ -100,6 +140,10 @@ export function AccountForm(props: Props) {
         ? parseCentsInput(values.startingBalance) ?? 0
         : 0;
 
+    // Type-aware detail payload — fields outside the type's allowlist are
+    // dropped here; the server validates again.
+    const details = buildDetailsPayload(values);
+
     setSubmitting(true);
     try {
       if (props.mode === "create") {
@@ -109,7 +153,11 @@ export function AccountForm(props: Props) {
           isLiability: values.isLiability,
           balanceCents: cents,
           currency: props.currency,
-          notes: values.notes?.trim() || null
+          notes: values.notes?.trim() || null,
+          trackHoldings:
+            (values.type === "investment" || values.type === "crypto") &&
+            values.trackHoldings === true,
+          ...details
         });
         toast.success("Account added.");
       } else {
@@ -119,7 +167,11 @@ export function AccountForm(props: Props) {
           isLiability: values.isLiability,
           notes: values.notes?.trim() || null
         });
-        toast.success("Updated.");
+        // Two-step per the brief: base fields, then type-specific details.
+        if (Object.keys(details).length > 0) {
+          await updateAccountDetails(props.accountId, details);
+        }
+        toast.success("Saved.");
       }
       props.onDone();
     } catch (err) {
@@ -230,6 +282,8 @@ export function AccountForm(props: Props) {
           />
         )}
 
+        <DetailsSection type={watchedType} form={form} mode={props.mode} />
+
         <FormField
           control={form.control}
           name="notes"
@@ -258,6 +312,232 @@ export function AccountForm(props: Props) {
         </div>
       </form>
     </Form>
+  );
+}
+
+function buildDetailsPayload(values: AccountFormValues): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  switch (values.type) {
+    case "cash":
+    case "other":
+      out.institution = values.institution?.trim() || null;
+      break;
+    case "savings":
+      out.rateBps = bpsFromPercent(values.rate);
+      out.institution = values.institution?.trim() || null;
+      break;
+    case "investment":
+    case "crypto":
+      out.institution = values.institution?.trim() || null;
+      break;
+    case "credit":
+      out.rateBps = bpsFromPercent(values.rate);
+      out.creditLimitCents = centsFromInput(values.creditLimit);
+      out.statementDay = intFromString(values.statementDay);
+      out.paymentDueDay = intFromString(values.paymentDueDay);
+      out.institution = values.institution?.trim() || null;
+      break;
+    case "loan":
+      out.rateBps = bpsFromPercent(values.rate);
+      out.originalPrincipalCents = centsFromInput(values.originalPrincipal);
+      out.monthlyPaymentCents = centsFromInput(values.monthlyPayment);
+      out.loanTermMonths = intFromString(values.loanTermMonths);
+      out.loanStartedAt = values.loanStartedAt?.trim() || null;
+      out.institution = values.institution?.trim() || null;
+      break;
+  }
+  // Drop undefined keys to keep the payload tidy.
+  for (const k of Object.keys(out)) {
+    if (typeof out[k] === "undefined") delete out[k];
+  }
+  return out;
+}
+
+function DetailsSection({
+  type,
+  form,
+  mode
+}: {
+  type: AccountType;
+  form: ReturnType<typeof useForm<AccountFormValues>>;
+  mode: "create" | "edit";
+}) {
+  if (type === "other" || type === "cash") {
+    return <InstitutionField form={form} />;
+  }
+
+  return (
+    <div className="space-y-3 rounded-md border bg-muted/20 p-3">
+      <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+        Details (optional)
+      </p>
+
+      {(type === "savings" || type === "credit" || type === "loan") && (
+        <FormField
+          control={form.control}
+          name="rate"
+          render={({ field }) => (
+            <FormItem>
+              <FormLabel>{type === "savings" ? "APY" : "APR"} (percent)</FormLabel>
+              <FormControl>
+                <Input inputMode="decimal" placeholder="4.5" {...field} />
+              </FormControl>
+              <FormMessage />
+            </FormItem>
+          )}
+        />
+      )}
+
+      {type === "credit" && (
+        <>
+          <FormField
+            control={form.control}
+            name="creditLimit"
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>Credit limit</FormLabel>
+                <FormControl>
+                  <Input inputMode="decimal" placeholder="2000" {...field} />
+                </FormControl>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+          <div className="grid grid-cols-2 gap-3">
+            <FormField
+              control={form.control}
+              name="statementDay"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>Statement day</FormLabel>
+                  <FormControl>
+                    <Input type="number" min={1} max={31} placeholder="15" {...field} />
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+            <FormField
+              control={form.control}
+              name="paymentDueDay"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>Payment due day</FormLabel>
+                  <FormControl>
+                    <Input type="number" min={1} max={31} placeholder="5" {...field} />
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+          </div>
+        </>
+      )}
+
+      {type === "loan" && (
+        <>
+          <FormField
+            control={form.control}
+            name="originalPrincipal"
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>Original principal</FormLabel>
+                <FormControl>
+                  <Input inputMode="decimal" placeholder="8000" {...field} />
+                </FormControl>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+          <div className="grid grid-cols-2 gap-3">
+            <FormField
+              control={form.control}
+              name="monthlyPayment"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>Monthly payment</FormLabel>
+                  <FormControl>
+                    <Input inputMode="decimal" placeholder="350" {...field} />
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+            <FormField
+              control={form.control}
+              name="loanTermMonths"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>Term (months)</FormLabel>
+                  <FormControl>
+                    <Input type="number" min={0} placeholder="60" {...field} />
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+          </div>
+          <FormField
+            control={form.control}
+            name="loanStartedAt"
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>Loan started on</FormLabel>
+                <FormControl>
+                  <Input type="date" {...field} />
+                </FormControl>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+        </>
+      )}
+
+      {(type === "investment" || type === "crypto") && mode === "create" && (
+        <FormField
+          control={form.control}
+          name="trackHoldings"
+          render={({ field }) => (
+            <FormItem>
+              <div className="flex items-center justify-between rounded-md border bg-background px-3 py-2">
+                <div>
+                  <Label className="text-sm">Track individual holdings</Label>
+                  <p className="text-xs text-muted-foreground">
+                    Balance will derive from the sum of positions you log.
+                  </p>
+                </div>
+                <Switch checked={field.value ?? false} onCheckedChange={field.onChange} />
+              </div>
+              <FormMessage />
+            </FormItem>
+          )}
+        />
+      )}
+
+      <InstitutionField form={form} />
+    </div>
+  );
+}
+
+function InstitutionField({
+  form
+}: {
+  form: ReturnType<typeof useForm<AccountFormValues>>;
+}) {
+  return (
+    <FormField
+      control={form.control}
+      name="institution"
+      render={({ field }) => (
+        <FormItem>
+          <FormLabel>Institution (optional)</FormLabel>
+          <FormControl>
+            <Input placeholder="Revolut, N26, Trade Republic, Coinbase…" {...field} />
+          </FormControl>
+          <FormMessage />
+        </FormItem>
+      )}
+    />
   );
 }
 

@@ -7,8 +7,11 @@ import { z } from "zod";
 import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { env } from "@/lib/env";
+import { Prisma } from "@prisma/client";
+
 import { nextDueAt } from "@/lib/money/bill-utils";
 import { nextDateForCadence } from "@/lib/money/income";
+import { accountValueFromHoldings } from "@/lib/money/investments";
 import { advanceCycle } from "@/lib/money/subscription-utils";
 import {
   deleteRemindersForBill,
@@ -116,14 +119,29 @@ const ACCOUNT_TYPE = z.enum([
   "other"
 ]);
 
-const createFinancialAccountSchema = z.object({
-  name: z.string().trim().min(1, "Give it a name.").max(60),
-  type: ACCOUNT_TYPE,
-  isLiability: z.boolean(),
-  balanceCents: z.number().int().nonnegative().default(0),
-  currency: z.string().min(1).default(env.DEFAULT_CURRENCY),
-  notes: z.string().trim().max(500).optional().nullable()
+const detailFieldsSchema = z.object({
+  rateBps: z.number().int().nonnegative().nullable().optional(),
+  originalPrincipalCents: z.number().int().nonnegative().nullable().optional(),
+  monthlyPaymentCents: z.number().int().nonnegative().nullable().optional(),
+  loanTermMonths: z.number().int().nonnegative().nullable().optional(),
+  loanStartedAt: z.string().nullable().optional(),
+  creditLimitCents: z.number().int().nonnegative().nullable().optional(),
+  statementDay: z.number().int().min(1).max(31).nullable().optional(),
+  paymentDueDay: z.number().int().min(1).max(31).nullable().optional(),
+  institution: z.string().trim().max(80).nullable().optional()
 });
+
+const createFinancialAccountSchema = z
+  .object({
+    name: z.string().trim().min(1, "Give it a name.").max(60),
+    type: ACCOUNT_TYPE,
+    isLiability: z.boolean(),
+    balanceCents: z.number().int().nonnegative().default(0),
+    currency: z.string().min(1).default(env.DEFAULT_CURRENCY),
+    notes: z.string().trim().max(500).optional().nullable(),
+    trackHoldings: z.boolean().optional()
+  })
+  .merge(detailFieldsSchema);
 
 const updateFinancialAccountSchema = z.object({
   name: z.string().trim().min(1).max(60).optional(),
@@ -132,10 +150,35 @@ const updateFinancialAccountSchema = z.object({
   notes: z.string().trim().max(500).optional().nullable()
 });
 
+const updateAccountDetailsSchema = detailFieldsSchema;
+
 const updateAccountBalanceSchema = z.object({
   newBalanceCents: z.number().int().nonnegative(),
   takenAt: z.string().optional(),
   note: z.string().trim().max(200).optional().nullable()
+});
+
+const holdingInputSchema = z.object({
+  ticker: z.string().trim().min(1).max(20),
+  name: z.string().trim().max(80).optional().nullable(),
+  shares: z
+    .string()
+    .min(1, "How many shares?")
+    .refine((v) => {
+      const n = Number.parseFloat(v);
+      return Number.isFinite(n) && n > 0;
+    }, "Enter a positive number."),
+  avgCostCents: z.number().int().nonnegative().nullable().optional(),
+  lastKnownPriceCents: z.number().int().nonnegative(),
+  lastPriceUpdate: z.string().optional(),
+  notes: z.string().trim().max(500).optional().nullable()
+});
+
+const updateHoldingSchema = holdingInputSchema.partial();
+
+const updatePriceSchema = z.object({
+  lastKnownPriceCents: z.number().int().nonnegative(),
+  lastPriceUpdate: z.string().optional()
 });
 
 const createTransactionSchema = z.object({
@@ -162,7 +205,11 @@ export type UpdateIncomeSourceInput = z.infer<typeof updateIncomeSourceSchema>;
 export type MarkIncomeReceivedInput = z.infer<typeof markIncomeReceivedSchema>;
 export type CreateFinancialAccountInput = z.infer<typeof createFinancialAccountSchema>;
 export type UpdateFinancialAccountInput = z.infer<typeof updateFinancialAccountSchema>;
+export type UpdateAccountDetailsInput = z.infer<typeof updateAccountDetailsSchema>;
 export type UpdateAccountBalanceInput = z.infer<typeof updateAccountBalanceSchema>;
+export type HoldingInput = z.infer<typeof holdingInputSchema>;
+export type UpdateHoldingInput = z.infer<typeof updateHoldingSchema>;
+export type UpdatePriceInput = z.infer<typeof updatePriceSchema>;
 export type CreateTransactionInput = z.infer<typeof createTransactionSchema>;
 export type UpdateTransactionInput = z.infer<typeof updateTransactionSchema>;
 
@@ -930,10 +977,97 @@ function parseTakenAt(input: string | null | undefined): Date {
   return Number.isNaN(d.getTime()) ? new Date() : d;
 }
 
+// Allowed detail fields per account type. Used for both validation in
+// updateAccountDetails (reject patches with irrelevant fields) and as the
+// authoritative shape for the Details section of the account form.
+const DETAIL_FIELDS_BY_TYPE: Record<string, ReadonlyArray<keyof DetailFields>> = {
+  cash: ["institution"],
+  savings: ["rateBps", "institution"],
+  investment: ["institution"],
+  crypto: ["institution"],
+  credit: ["rateBps", "creditLimitCents", "statementDay", "paymentDueDay", "institution"],
+  loan: [
+    "rateBps",
+    "originalPrincipalCents",
+    "monthlyPaymentCents",
+    "loanTermMonths",
+    "loanStartedAt",
+    "institution"
+  ],
+  other: ["institution"]
+};
+
+type DetailFields = {
+  rateBps: number | null;
+  originalPrincipalCents: number | null;
+  monthlyPaymentCents: number | null;
+  loanTermMonths: number | null;
+  loanStartedAt: Date | null;
+  creditLimitCents: number | null;
+  statementDay: number | null;
+  paymentDueDay: number | null;
+  institution: string | null;
+};
+
+function parseLoanStart(input: string | null | undefined): Date | null {
+  if (!input) return null;
+  const d = new Date(input);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+/**
+ * Build a Prisma-compatible patch from a detail-fields input, filtered to
+ * only the fields allowed for the account's type. Fields outside the
+ * allowlist throw. Undefined fields (not in the patch) are dropped.
+ */
+function buildDetailPatch(
+  type: string,
+  input: UpdateAccountDetailsInput | CreateFinancialAccountInput
+): Partial<DetailFields> {
+  const allowed = new Set(DETAIL_FIELDS_BY_TYPE[type] ?? []);
+  const patch: Partial<DetailFields> = {};
+
+  function consume<K extends keyof DetailFields>(key: K, value: DetailFields[K] | undefined) {
+    if (typeof value === "undefined") return;
+    if (!allowed.has(key)) {
+      throw new Error(`${String(key)} is not allowed on a ${type} account.`);
+    }
+    patch[key] = value;
+  }
+
+  consume("rateBps", input.rateBps ?? null);
+  consume("originalPrincipalCents", input.originalPrincipalCents ?? null);
+  consume("monthlyPaymentCents", input.monthlyPaymentCents ?? null);
+  consume("loanTermMonths", input.loanTermMonths ?? null);
+  consume(
+    "loanStartedAt",
+    typeof input.loanStartedAt === "undefined"
+      ? undefined
+      : parseLoanStart(input.loanStartedAt ?? null)
+  );
+  consume("creditLimitCents", input.creditLimitCents ?? null);
+  consume("statementDay", input.statementDay ?? null);
+  consume("paymentDueDay", input.paymentDueDay ?? null);
+  consume(
+    "institution",
+    typeof input.institution === "undefined" ? undefined : input.institution?.trim() || null
+  );
+
+  return patch;
+}
+
 export async function createFinancialAccount(input: CreateFinancialAccountInput) {
   const session = await requireSession();
   const data = createFinancialAccountSchema.parse(input);
   const now = new Date();
+
+  const detailPatch = buildDetailPatch(data.type, data);
+
+  // trackHoldings is only meaningful on investment/crypto. Silently ignore
+  // the flag on other types rather than erroring — the form may pass it
+  // through speculatively when the user switches type back and forth.
+  const trackHoldings =
+    data.trackHoldings === true && (data.type === "investment" || data.type === "crypto");
 
   const created = await prisma.financialAccount.create({
     data: {
@@ -944,7 +1078,8 @@ export async function createFinancialAccount(input: CreateFinancialAccountInput)
       balanceCents: data.balanceCents,
       currency: data.currency,
       notes: data.notes?.trim() || null,
-      // Initial snapshot anchors the chart history.
+      trackHoldings,
+      ...detailPatch,
       snapshots: {
         create: { balanceCents: data.balanceCents, takenAt: now }
       }
@@ -953,6 +1088,33 @@ export async function createFinancialAccount(input: CreateFinancialAccountInput)
 
   revalidate();
   return { id: created.id };
+}
+
+export async function updateAccountDetails(
+  id: string,
+  input: UpdateAccountDetailsInput
+) {
+  const session = await requireSession();
+  const data = updateAccountDetailsSchema.parse(input);
+  const account = await prisma.financialAccount.findUnique({
+    where: { id },
+    select: { id: true, userId: true, type: true }
+  });
+  if (!account || account.userId !== session.user.id) {
+    throw new Error("Account not found.");
+  }
+
+  const patch = buildDetailPatch(account.type, data);
+  if (Object.keys(patch).length === 0) {
+    revalidate();
+    return;
+  }
+
+  await prisma.financialAccount.update({
+    where: { id },
+    data: patch
+  });
+  revalidate();
 }
 
 export async function updateFinancialAccount(
@@ -1038,7 +1200,150 @@ export async function deleteSnapshot(id: string) {
 export async function deleteFinancialAccount(id: string) {
   const session = await requireSession();
   await requireOwnedFinancialAccount(id, session.user.id);
-  // Cascade in schema removes snapshots.
+  // Cascade in schema removes snapshots + holdings.
   await prisma.financialAccount.delete({ where: { id } });
+  revalidate();
+}
+
+// ----- Holdings (investment + crypto accounts) -----
+
+async function requireOwnedHolding(id: string, userId: string) {
+  const holding = await prisma.holding.findUnique({
+    where: { id },
+    select: {
+      id: true,
+      accountId: true,
+      account: { select: { userId: true } }
+    }
+  });
+  if (!holding || holding.account.userId !== userId) throw new Error("Holding not found.");
+  return holding;
+}
+
+function parsePriceUpdate(input: string | undefined): Date {
+  if (!input) return new Date();
+  const d = new Date(input);
+  return Number.isNaN(d.getTime()) ? new Date() : d;
+}
+
+/**
+ * Recompute the account's balance from its holdings and append a snapshot.
+ * Caller is expected to be inside (or about to commit) a transaction that
+ * just mutated the holdings.
+ */
+async function recomputeAccountFromHoldings(accountId: string) {
+  const holdings = await prisma.holding.findMany({
+    where: { accountId },
+    select: { shares: true, avgCostCents: true, lastKnownPriceCents: true }
+  });
+
+  const totalCents = accountValueFromHoldings(
+    holdings.map((h) => ({
+      shares: h.shares.toString(),
+      avgCostCents: h.avgCostCents,
+      lastKnownPriceCents: h.lastKnownPriceCents
+    }))
+  );
+
+  await prisma.$transaction([
+    prisma.financialAccount.update({
+      where: { id: accountId },
+      data: { balanceCents: totalCents }
+    }),
+    prisma.balanceSnapshot.create({
+      data: { accountId, balanceCents: totalCents }
+    })
+  ]);
+}
+
+export async function setTrackHoldings(id: string, enabled: boolean) {
+  const session = await requireSession();
+  await requireOwnedFinancialAccount(id, session.user.id);
+
+  await prisma.financialAccount.update({
+    where: { id },
+    data: { trackHoldings: enabled }
+  });
+
+  // When enabling, immediately derive the balance from any existing holdings.
+  // When disabling, the current balanceCents stays as the frozen value the
+  // user can edit manually thereafter.
+  if (enabled) await recomputeAccountFromHoldings(id);
+
+  revalidate();
+}
+
+export async function addHolding(accountId: string, input: HoldingInput) {
+  const session = await requireSession();
+  await requireOwnedFinancialAccount(accountId, session.user.id);
+  const data = holdingInputSchema.parse(input);
+
+  await prisma.holding.create({
+    data: {
+      accountId,
+      ticker: data.ticker.trim().toUpperCase(),
+      name: data.name?.trim() || null,
+      shares: new Prisma.Decimal(data.shares),
+      avgCostCents: data.avgCostCents ?? null,
+      lastKnownPriceCents: data.lastKnownPriceCents,
+      lastPriceUpdate: parsePriceUpdate(data.lastPriceUpdate),
+      notes: data.notes?.trim() || null
+    }
+  });
+
+  await recomputeAccountFromHoldings(accountId);
+  revalidate();
+}
+
+export async function updateHolding(id: string, input: UpdateHoldingInput) {
+  const session = await requireSession();
+  const holding = await requireOwnedHolding(id, session.user.id);
+  const data = updateHoldingSchema.parse(input);
+
+  await prisma.holding.update({
+    where: { id },
+    data: {
+      ...(typeof data.ticker === "string" && { ticker: data.ticker.trim().toUpperCase() }),
+      ...(typeof data.name !== "undefined" && { name: data.name?.trim() || null }),
+      ...(typeof data.shares === "string" && { shares: new Prisma.Decimal(data.shares) }),
+      ...(typeof data.avgCostCents !== "undefined" && {
+        avgCostCents: data.avgCostCents ?? null
+      }),
+      ...(typeof data.lastKnownPriceCents === "number" && {
+        lastKnownPriceCents: data.lastKnownPriceCents
+      }),
+      ...(typeof data.lastPriceUpdate === "string" && {
+        lastPriceUpdate: parsePriceUpdate(data.lastPriceUpdate)
+      }),
+      ...(typeof data.notes !== "undefined" && { notes: data.notes?.trim() || null })
+    }
+  });
+
+  await recomputeAccountFromHoldings(holding.accountId);
+  revalidate();
+}
+
+export async function updatePrice(id: string, input: UpdatePriceInput) {
+  const session = await requireSession();
+  const holding = await requireOwnedHolding(id, session.user.id);
+  const data = updatePriceSchema.parse(input);
+
+  await prisma.holding.update({
+    where: { id },
+    data: {
+      lastKnownPriceCents: data.lastKnownPriceCents,
+      lastPriceUpdate: parsePriceUpdate(data.lastPriceUpdate)
+    }
+  });
+
+  await recomputeAccountFromHoldings(holding.accountId);
+  revalidate();
+}
+
+export async function deleteHolding(id: string) {
+  const session = await requireSession();
+  const holding = await requireOwnedHolding(id, session.user.id);
+  await prisma.holding.delete({ where: { id } });
+  await recomputeAccountFromHoldings(holding.accountId);
   revalidate();
 }

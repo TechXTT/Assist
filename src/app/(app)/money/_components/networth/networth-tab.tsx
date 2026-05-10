@@ -14,26 +14,31 @@ import {
 } from "@/app/(app)/money/_components/networth/networth-chart";
 import { NetworthSummaryCard } from "@/app/(app)/money/_components/networth/networth-summary-card";
 import type { FinancialAccountRow } from "@/lib/money/account-queries";
+import type { HoldingRow } from "@/lib/money/holding-queries";
 import type { SnapshotHistoryRow } from "@/app/(app)/money/_components/networth/snapshot-history-sheet";
 
 export function NetworthTab({
   accounts,
   snapshots,
+  holdings,
   history,
   totalCents,
   assetCents,
   liabilityCents,
   deltaThisMonthCents,
-  currency
+  currency,
+  timezone
 }: {
   accounts: FinancialAccountRow[];
-  snapshots: SnapshotHistoryRow[]; // all snapshots, will be grouped by accountId
+  snapshots: SnapshotHistoryRow[];
+  holdings: HoldingRow[];
   history: ChartPoint[];
   totalCents: number;
   assetCents: number;
   liabilityCents: number;
   deltaThisMonthCents: number;
   currency: string;
+  timezone: string;
 }) {
   const [filterKey, setFilterKey] = useState<string | null>(null);
 
@@ -47,8 +52,16 @@ export function NetworthTab({
     return map;
   }, [snapshots]);
 
-  // Composition data: one row per (type, isLiability) combo, sourced from
-  // active + included accounts only (matches the headline rule).
+  const holdingsByAccount = useMemo(() => {
+    const map = new Map<string, HoldingRow[]>();
+    for (const h of holdings) {
+      const list = map.get(h.accountId) ?? [];
+      list.push(h);
+      map.set(h.accountId, list);
+    }
+    return map;
+  }, [holdings]);
+
   const compositionRows = useMemo<CompositionRow[]>(() => {
     const buckets = new Map<string, CompositionRow>();
     for (const a of accounts) {
@@ -109,7 +122,9 @@ export function NetworthTab({
           <AccountList
             accounts={accounts}
             snapshotsByAccount={snapshotsByAccount}
+            holdingsByAccount={holdingsByAccount}
             currency={currency}
+            timezone={timezone}
             filterType={filterKey}
           />
         </>

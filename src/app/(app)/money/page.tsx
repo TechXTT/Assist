@@ -7,6 +7,7 @@ import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { env } from "@/lib/env";
 import { listFinancialAccounts } from "@/lib/money/account-queries";
+import { listAllHoldings } from "@/lib/money/holding-queries";
 import { listBills } from "@/lib/money/bill-queries";
 import { listBudgets } from "@/lib/money/budget-queries";
 import { listCategories } from "@/lib/money/category-queries";
@@ -134,7 +135,8 @@ export default async function MoneyPage({
     networth,
     history,
     startOfMonthNet,
-    allSnapshots
+    allSnapshots,
+    allHoldings
   ] = await Promise.all([
     listCategories(session.user.id, { includeArchived: false }),
     listCategories(session.user.id, { includeArchived: true }),
@@ -165,7 +167,8 @@ export default async function MoneyPage({
         takenAt: true,
         note: true
       }
-    })
+    }),
+    listAllHoldings(session.user.id)
   ]);
 
   const deltaThisMonthCents =
@@ -225,12 +228,14 @@ export default async function MoneyPage({
           <NetworthTab
             accounts={financialAccounts}
             snapshots={allSnapshots}
+            holdings={allHoldings}
             history={history}
             totalCents={networth.totalCents}
             assetCents={networth.assetCents}
             liabilityCents={networth.liabilityCents}
             deltaThisMonthCents={deltaThisMonthCents}
             currency={currency}
+            timezone={tz}
           />
         }
       />

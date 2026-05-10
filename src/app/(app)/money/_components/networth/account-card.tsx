@@ -7,6 +7,7 @@ import {
   Eye,
   EyeOff,
   History,
+  LineChart,
   MoreHorizontal,
   Pencil
 } from "lucide-react";
@@ -35,28 +36,46 @@ import {
 } from "@/lib/money/account-type-meta";
 import {
   setIncludeInNetWorth,
+  setTrackHoldings,
   unarchiveFinancialAccount
 } from "@/app/(app)/money/actions";
+import { AccountDetailEnrichment } from "@/app/(app)/money/_components/networth/account-detail-enrichment";
 import {
   AccountForm,
   type AccountFormValues
 } from "@/app/(app)/money/_components/networth/account-form";
 import { ArchiveAccountDialog } from "@/app/(app)/money/_components/networth/archive-account-dialog";
+import { HoldingsList } from "@/app/(app)/money/_components/networth/holdings/holdings-list";
 import {
   SnapshotHistorySheet,
   type SnapshotHistoryRow
 } from "@/app/(app)/money/_components/networth/snapshot-history-sheet";
 import { UpdateBalanceDialog } from "@/app/(app)/money/_components/networth/update-balance-dialog";
 import type { FinancialAccountRow } from "@/lib/money/account-queries";
+import type { HoldingRow } from "@/lib/money/holding-queries";
+
+function bpsToPercentString(bps: number | null): string {
+  if (bps === null || bps === undefined) return "";
+  return (bps / 100).toString();
+}
+
+function centsToInput(cents: number | null): string {
+  if (cents === null || cents === undefined) return "";
+  return (cents / 100).toString();
+}
 
 export function AccountCard({
   account,
   currency,
-  snapshots
+  timezone,
+  snapshots,
+  holdings
 }: {
   account: FinancialAccountRow;
   currency: string;
+  timezone: string;
   snapshots: SnapshotHistoryRow[];
+  holdings: HoldingRow[];
 }) {
   const [updating, setUpdating] = useState(false);
   const [editing, setEditing] = useState(false);
@@ -67,6 +86,7 @@ export function AccountCard({
     ? ACCOUNT_TYPE_META[account.type]
     : ACCOUNT_TYPE_META.other;
   const Icon = meta.icon;
+  const isTrackable = account.type === "investment" || account.type === "crypto";
 
   const balanceLabel = formatCents(account.balanceCents, currency);
   const signedBalanceClass = account.isLiability
@@ -79,6 +99,20 @@ export function AccountCard({
       try {
         await setIncludeInNetWorth(account.id, next);
         toast.success(next ? "Included in net worth." : "Excluded from net worth.");
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : "Couldn't update.");
+      }
+    });
+  }
+
+  function toggleTrackHoldings() {
+    const next = !account.trackHoldings;
+    start(async () => {
+      try {
+        await setTrackHoldings(account.id, next);
+        toast.success(
+          next ? "Holdings tracking on." : "Holdings tracking off. Balance frozen at last value."
+        );
       } catch (err) {
         toast.error(err instanceof Error ? err.message : "Couldn't update.");
       }
@@ -103,7 +137,7 @@ export function AccountCard({
         account.archived && "opacity-60"
       )}
     >
-      <CardContent className="space-y-2 p-4">
+      <CardContent className="space-y-3 p-4">
         <div className="flex items-start gap-3">
           <span
             aria-hidden
@@ -130,6 +164,7 @@ export function AccountCard({
             <div className="mt-0.5 flex flex-wrap items-center gap-x-2 text-xs text-muted-foreground">
               <span>{meta.label}</span>
               {account.isLiability && <span>· liability</span>}
+              {account.institution && <span>· at {account.institution}</span>}
               {account.latestSnapshotAt && (
                 <span>
                   · updated {formatDistanceToNow(account.latestSnapshotAt, { addSuffix: true })}
@@ -141,6 +176,22 @@ export function AccountCard({
             )}
           </div>
         </div>
+
+        <AccountDetailEnrichment
+          account={account}
+          holdings={holdings}
+          currency={currency}
+          timezone={timezone}
+        />
+
+        {isTrackable && account.trackHoldings && (
+          <HoldingsList
+            accountId={account.id}
+            accountType={account.type === "crypto" ? "crypto" : "investment"}
+            holdings={holdings}
+            currency={currency}
+          />
+        )}
 
         <div className="flex items-center justify-between gap-2 pt-1">
           {account.archived ? (
@@ -155,6 +206,10 @@ export function AccountCard({
               <ArchiveRestore className="h-3.5 w-3.5" />
               Restore
             </Button>
+          ) : account.trackHoldings ? (
+            <p className="text-xs text-muted-foreground">
+              Balance is derived from holdings — update prices instead.
+            </p>
           ) : (
             <Button
               type="button"
@@ -189,6 +244,14 @@ export function AccountCard({
                   <History />
                   <span>View history</span>
                 </DropdownMenuItem>
+                {isTrackable && (
+                  <DropdownMenuItem onSelect={toggleTrackHoldings}>
+                    <LineChart />
+                    <span>
+                      {account.trackHoldings ? "Stop tracking holdings" : "Track holdings"}
+                    </span>
+                  </DropdownMenuItem>
+                )}
                 <DropdownMenuItem onSelect={toggleInclude}>
                   {account.includeInNetWorth ? <EyeOff /> : <Eye />}
                   <span>
@@ -228,7 +291,20 @@ export function AccountCard({
                   AccountFormValues["type"],
                 isLiability: account.isLiability,
                 startingBalance: "",
-                notes: account.notes ?? ""
+                notes: account.notes ?? "",
+                rate: bpsToPercentString(account.rateBps),
+                institution: account.institution ?? "",
+                trackHoldings: account.trackHoldings,
+                creditLimit: centsToInput(account.creditLimitCents),
+                statementDay: account.statementDay ? String(account.statementDay) : "",
+                paymentDueDay: account.paymentDueDay ? String(account.paymentDueDay) : "",
+                originalPrincipal: centsToInput(account.originalPrincipalCents),
+                monthlyPayment: centsToInput(account.monthlyPaymentCents),
+                loanTermMonths: account.loanTermMonths ? String(account.loanTermMonths) : "",
+                loanStartedAt:
+                  account.loanStartedAt
+                    ? account.loanStartedAt.toISOString().slice(0, 10)
+                    : ""
               } satisfies AccountFormValues
             }
             onDone={() => setEditing(false)}
@@ -248,10 +324,6 @@ export function AccountCard({
 }
 
 function ArchiveMenuItem({ accountId, name }: { accountId: string; name: string }) {
-  // Wrap the existing AlertDialog trigger as a menu item by rendering the
-  // dialog inline; the DropdownMenuItem handler calls .click() on a hidden
-  // button. Simpler: just render the ArchiveAccountDialog button — it acts
-  // as a menu item visually with the same hover.
   return (
     <div className="px-1 py-0.5">
       <ArchiveAccountDialog accountId={accountId} name={name} />

@@ -12,6 +12,18 @@ export type FinancialAccountRow = {
   notes: string | null;
   updatedAt: Date;
   latestSnapshotAt: Date | null;
+
+  // Detail fields (all optional, all from 4J)
+  rateBps: number | null;
+  originalPrincipalCents: number | null;
+  monthlyPaymentCents: number | null;
+  loanTermMonths: number | null;
+  loanStartedAt: Date | null;
+  creditLimitCents: number | null;
+  statementDay: number | null;
+  paymentDueDay: number | null;
+  institution: string | null;
+  trackHoldings: boolean;
 };
 
 export async function listFinancialAccounts(
@@ -35,6 +47,16 @@ export async function listFinancialAccounts(
       archived: true,
       notes: true,
       updatedAt: true,
+      rateBps: true,
+      originalPrincipalCents: true,
+      monthlyPaymentCents: true,
+      loanTermMonths: true,
+      loanStartedAt: true,
+      creditLimitCents: true,
+      statementDay: true,
+      paymentDueDay: true,
+      institution: true,
+      trackHoldings: true,
       snapshots: {
         orderBy: { takenAt: "desc" },
         take: 1,
@@ -54,6 +76,16 @@ export async function listFinancialAccounts(
     archived: r.archived,
     notes: r.notes,
     updatedAt: r.updatedAt,
+    rateBps: r.rateBps,
+    originalPrincipalCents: r.originalPrincipalCents,
+    monthlyPaymentCents: r.monthlyPaymentCents,
+    loanTermMonths: r.loanTermMonths,
+    loanStartedAt: r.loanStartedAt,
+    creditLimitCents: r.creditLimitCents,
+    statementDay: r.statementDay,
+    paymentDueDay: r.paymentDueDay,
+    institution: r.institution,
+    trackHoldings: r.trackHoldings,
     latestSnapshotAt: r.snapshots[0]?.takenAt ?? null
   }));
 }
@@ -69,8 +101,6 @@ export async function listSnapshots(
   userId: string,
   accountId: string
 ): Promise<SnapshotRow[]> {
-  // Ownership check via account.userId — keeps the helper safe even if
-  // callers forget to require ownership themselves.
   const account = await prisma.financialAccount.findFirst({
     where: { id: accountId, userId },
     select: { id: true }

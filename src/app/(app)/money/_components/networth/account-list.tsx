@@ -5,17 +5,22 @@ import { useState } from "react";
 import { Switch } from "@/components/ui/switch";
 import { AccountCard } from "@/app/(app)/money/_components/networth/account-card";
 import type { FinancialAccountRow } from "@/lib/money/account-queries";
+import type { HoldingRow } from "@/lib/money/holding-queries";
 import type { SnapshotHistoryRow } from "@/app/(app)/money/_components/networth/snapshot-history-sheet";
 
 export function AccountList({
   accounts,
   snapshotsByAccount,
+  holdingsByAccount,
   currency,
+  timezone,
   filterType
 }: {
   accounts: FinancialAccountRow[];
   snapshotsByAccount: Map<string, SnapshotHistoryRow[]>;
+  holdingsByAccount: Map<string, HoldingRow[]>;
   currency: string;
+  timezone: string;
   filterType: string | null;
 }) {
   const [showArchived, setShowArchived] = useState(false);
@@ -45,7 +50,9 @@ export function AccountList({
               key={a.id}
               account={a}
               currency={currency}
+              timezone={timezone}
               snapshots={snapshotsByAccount.get(a.id) ?? []}
+              holdings={holdingsByAccount.get(a.id) ?? []}
             />
           ))}
         </div>
@@ -73,7 +80,9 @@ export function AccountList({
                   key={a.id}
                   account={a}
                   currency={currency}
+                  timezone={timezone}
                   snapshots={snapshotsByAccount.get(a.id) ?? []}
+                  holdings={holdingsByAccount.get(a.id) ?? []}
                 />
               ))}
             </div>
