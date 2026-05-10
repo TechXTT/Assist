@@ -20,6 +20,17 @@ const renameCategorySchema = z.object({
   name: z.string().trim().min(1, "Give it a name.").max(40)
 });
 
+const createBudgetSchema = z.object({
+  name: z.string().trim().min(1, "Give it a name.").max(40),
+  color: z.string().regex(HEX_COLOR, "Pick a color.").default("#7c9885"),
+  monthlyLimitCents: z.number().int().positive("Set a limit above zero.")
+});
+
+const updateBudgetSchema = z.object({
+  color: z.string().regex(HEX_COLOR, "Pick a color.").optional(),
+  monthlyLimitCents: z.number().int().positive("Set a limit above zero.").optional()
+});
+
 const createTransactionSchema = z.object({
   amountCents: z.number().int(),
   currency: z.string().min(1).default(env.DEFAULT_CURRENCY),
@@ -31,6 +42,8 @@ const createTransactionSchema = z.object({
 const updateTransactionSchema = createTransactionSchema.partial();
 
 export type CreateCategoryInput = z.infer<typeof createCategorySchema>;
+export type CreateBudgetInput = z.infer<typeof createBudgetSchema>;
+export type UpdateBudgetInput = z.infer<typeof updateBudgetSchema>;
 export type CreateTransactionInput = z.infer<typeof createTransactionSchema>;
 export type UpdateTransactionInput = z.infer<typeof updateTransactionSchema>;
 
@@ -148,6 +161,74 @@ export async function unarchiveCategory(id: string) {
   const session = await requireSession();
   await requireOwnedCategory(id, session.user.id);
   await prisma.budgetCategory.update({ where: { id }, data: { archived: false } });
+  revalidate();
+}
+
+// ----- Budgets -----
+//
+// A "budget" is a BudgetCategory with monthlyLimitCents > 0.
+// createBudget upserts by name (matching the brief: name "must match an
+// existing or new category"); archived rows with the same name are
+// restored. updateBudget edits limit + color. archiveBudget archives the
+// whole category — the confirm dialog warns about the picker side-effect.
+
+export async function createBudget(input: CreateBudgetInput) {
+  const session = await requireSession();
+  const data = createBudgetSchema.parse(input);
+
+  const existing = await prisma.budgetCategory.findFirst({
+    where: { userId: session.user.id, name: data.name }
+  });
+
+  if (existing) {
+    if (!existing.archived && existing.monthlyLimitCents > 0) {
+      throw new Error("That category already has a budget — edit it instead.");
+    }
+    await prisma.budgetCategory.update({
+      where: { id: existing.id },
+      data: {
+        archived: false,
+        color: data.color,
+        monthlyLimitCents: data.monthlyLimitCents
+      }
+    });
+    revalidate();
+    return { id: existing.id };
+  }
+
+  const created = await prisma.budgetCategory.create({
+    data: {
+      userId: session.user.id,
+      name: data.name,
+      color: data.color,
+      monthlyLimitCents: data.monthlyLimitCents
+    }
+  });
+  revalidate();
+  return { id: created.id };
+}
+
+export async function updateBudget(id: string, input: UpdateBudgetInput) {
+  const session = await requireSession();
+  const data = updateBudgetSchema.parse(input);
+  await requireOwnedCategory(id, session.user.id);
+
+  await prisma.budgetCategory.update({
+    where: { id },
+    data: {
+      ...(typeof data.color === "string" && { color: data.color }),
+      ...(typeof data.monthlyLimitCents === "number" && {
+        monthlyLimitCents: data.monthlyLimitCents
+      })
+    }
+  });
+  revalidate();
+}
+
+export async function archiveBudget(id: string) {
+  const session = await requireSession();
+  await requireOwnedCategory(id, session.user.id);
+  await prisma.budgetCategory.update({ where: { id }, data: { archived: true } });
   revalidate();
 }
 

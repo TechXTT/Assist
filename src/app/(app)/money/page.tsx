@@ -6,6 +6,7 @@ import { toZonedTime } from "date-fns-tz";
 import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { env } from "@/lib/env";
+import { listBudgets } from "@/lib/money/budget-queries";
 import { listCategories } from "@/lib/money/category-queries";
 import {
   listTransactions,
@@ -18,6 +19,7 @@ import {
 } from "@/app/(app)/money/_components/money-tabs";
 import { ComingSoon } from "@/app/(app)/money/_components/coming-soon";
 import { SpendingTab } from "@/app/(app)/money/_components/spending/spending-tab";
+import { BudgetsTab } from "@/app/(app)/money/_components/budgets/budgets-tab";
 
 export const dynamic = "force-dynamic";
 
@@ -87,7 +89,7 @@ export default async function MoneyPage({
     .map((s) => s.trim())
     .filter(Boolean);
 
-  const [activeCategories, allCategories, transactions, breakdown] = await Promise.all([
+  const [activeCategories, allCategories, transactions, breakdown, budgets] = await Promise.all([
     listCategories(session.user.id, { includeArchived: false }),
     listCategories(session.user.id, { includeArchived: true }),
     listTransactions(session.user.id, {
@@ -95,8 +97,15 @@ export default async function MoneyPage({
       to: range.end,
       categoryNames: selectedCategoryNames.length > 0 ? selectedCategoryNames : undefined
     }),
-    monthlyBreakdown(session.user.id, tz)
+    monthlyBreakdown(session.user.id, tz),
+    listBudgets(session.user.id, tz)
   ]);
+
+  // Categories without an active budget — used by the budget-form picker.
+  const budgetedNames = new Set(budgets.map((b) => b.name));
+  const budgetCandidates = activeCategories
+    .filter((c) => !budgetedNames.has(c.name))
+    .map((c) => ({ id: c.id, name: c.name, color: c.color }));
 
   return (
     <div className="space-y-6">
@@ -123,9 +132,10 @@ export default async function MoneyPage({
           />
         }
         budgets={
-          <ComingSoon
-            title="Budgets"
-            blurb="Per-category monthly limits with friendly progress bars and an over-budget heads-up."
+          <BudgetsTab
+            budgets={budgets}
+            candidates={budgetCandidates}
+            currency={currency}
           />
         }
         bills={
