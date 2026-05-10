@@ -1,0 +1,238 @@
+// Personal-life assistant — single-user.
+// Local dev: SQLite. At deploy time, switch provider to "postgresql"
+// and change ExercisePlan.days to Json (currently CSV string for SQLite).
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ----- Auth (NextAuth + @next-auth/prisma-adapter shape) -----
+
+model User {
+  id            String    @id @default(cuid())
+  email         String    @unique
+  name          String?
+  image         String?
+  timezone      String    @default("Europe/Amsterdam")
+  briefingTime  String    @default("11:00")
+  emailVerified DateTime?
+  createdAt     DateTime  @default(now())
+
+  accounts         Account[]
+  sessions         Session[]
+  tasks            Task[]
+  calendarEvents   CalendarEvent[]
+  bills            Bill[]
+  subscriptions    Subscription[]
+  transactions     Transaction[]
+  budgetCategories BudgetCategory[]
+  savingsGoals     SavingsGoal[]
+  habitLogs        HabitLog[]
+  exercisePlans    ExercisePlan[]
+  reminders        Reminder[]
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String?
+  access_token      String?
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String?
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
+// ----- Tasks & deadlines -----
+
+model Task {
+  id            String    @id @default(cuid())
+  userId        String
+  title         String
+  description   String?
+  dueAt         DateTime?
+  priority      String    @default("med")
+  status        String    @default("todo")
+  source        String    @default("manual")
+  externalId    String?
+  tinyFirstStep String?
+  createdAt     DateTime  @default(now())
+  completedAt   DateTime?
+
+  user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  reminders Reminder[]
+
+  @@index([userId, status])
+  @@index([userId, dueAt])
+}
+
+// ----- Google Calendar -----
+
+model CalendarEvent {
+  id            String   @id @default(cuid())
+  userId        String
+  googleEventId String   @unique
+  title         String
+  startsAt      DateTime
+  endsAt        DateTime
+  location      String?
+  description   String?
+  lastSyncedAt  DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, startsAt])
+}
+
+// ----- Money -----
+
+model Bill {
+  id          String    @id @default(cuid())
+  userId      String
+  name        String
+  amountCents Int
+  currency    String    @default("EUR")
+  dueDay      Int?
+  dueDate     DateTime?
+  recurring   Boolean   @default(true)
+  category    String?
+  lastPaidAt  DateTime?
+  source      String    @default("manual")
+  externalId  String?
+
+  user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  reminders Reminder[]
+}
+
+model Subscription {
+  id              String   @id @default(cuid())
+  userId          String
+  name            String
+  amountCents     Int
+  currency        String   @default("EUR")
+  billingCycle    String
+  nextChargeAt    DateTime
+  category        String?
+  suspectedUnused Boolean  @default(false)
+  source          String   @default("manual")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model Transaction {
+  id          String   @id @default(cuid())
+  userId      String
+  amountCents Int
+  currency    String   @default("EUR")
+  description String
+  category    String?
+  occurredAt  DateTime
+  source      String   @default("manual")
+  externalId  String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, occurredAt])
+}
+
+model BudgetCategory {
+  id                String @id @default(cuid())
+  userId            String
+  name              String
+  monthlyLimitCents Int
+  color             String @default("#7c9885")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, name])
+}
+
+model SavingsGoal {
+  id          String    @id @default(cuid())
+  userId      String
+  name        String
+  targetCents Int
+  savedCents  Int       @default(0)
+  targetDate  DateTime?
+  notes       String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+// ----- Health -----
+
+model HabitLog {
+  id              String   @id @default(cuid())
+  userId          String
+  date            DateTime
+  sleepHours      Float?
+  exerciseMinutes Int?
+  mealsLogged     Int      @default(0)
+  waterGlasses    Int      @default(0)
+  mood            Int?
+  notes           String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, date])
+}
+
+model ExercisePlan {
+  id                  String @id @default(cuid())
+  userId              String
+  name                String
+  weeklyTargetMinutes Int    @default(90)
+  // CSV of weekday abbreviations e.g. "Mon,Wed,Fri".
+  // SQLite has no Json type; switch to Json on Postgres.
+  days                String
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+// ----- Reminders (deadline pressure engine) -----
+
+model Reminder {
+  id     String    @id @default(cuid())
+  userId String
+  taskId String?
+  billId String?
+  fireAt DateTime
+  level  String
+  sentAt DateTime?
+
+  user User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  task Task? @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  bill Bill? @relation(fields: [billId], references: [id], onDelete: Cascade)
+
+  @@index([userId, fireAt])
+}
