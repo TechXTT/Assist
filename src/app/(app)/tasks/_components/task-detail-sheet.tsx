@@ -12,6 +12,7 @@ import { Countdown } from "@/components/countdown";
 import { setTaskStatus } from "@/app/(app)/tasks/actions";
 import { TaskForm, type TaskFormValues } from "@/app/(app)/tasks/_components/task-form";
 import { DeleteTaskDialog } from "@/app/(app)/tasks/_components/delete-task-dialog";
+import { useMediaQuery } from "@/hooks/use-media-query";
 
 export type DetailTask = {
   id: string;
@@ -46,6 +47,11 @@ export function TaskDetailSheet({
   const open = task != null;
   const [editing, setEditing] = useState(false);
   const [pendingStatus, startStatus] = useTransition();
+  const isDesktop = useMediaQuery("(min-width: 768px)");
+  const side = isDesktop ? "right" : "bottom";
+  const sheetClass = isDesktop
+    ? "w-full overflow-y-auto sm:max-w-md"
+    : "max-h-[85dvh] overflow-y-auto rounded-t-xl";
 
   function close() {
     setEditing(false);
@@ -66,7 +72,7 @@ export function TaskDetailSheet({
 
   return (
     <Sheet open={open} onOpenChange={(v) => !v && close()}>
-      <SheetContent side="right" className="w-full overflow-y-auto sm:max-w-md">
+      <SheetContent side={side} className={sheetClass}>
         {task && (
           <>
             <SheetHeader>
