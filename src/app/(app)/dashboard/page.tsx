@@ -1,31 +1,101 @@
+import { redirect } from "next/navigation";
 import { getServerSession } from "next-auth";
+import { endOfDay, startOfDay } from "date-fns";
+import { fromZonedTime, toZonedTime } from "date-fns-tz";
 
 import { authOptions } from "@/lib/auth";
+import { prisma } from "@/lib/db";
+import { env } from "@/lib/env";
+import { listTodayTasks, listWeekDeadlines } from "@/lib/tasks/task-queries";
+import { populateTinyFirstSteps } from "@/lib/tasks/tiny-first-step";
+import { listActiveReminders } from "@/lib/tasks/reminders";
+import { ReminderBanners } from "@/components/reminder-banners";
 import { PlaceholderCard } from "@/components/placeholder-card";
+import { TodayCard } from "@/app/(app)/dashboard/_components/today-card";
+import { DeadlinesCard } from "@/app/(app)/dashboard/_components/deadlines-card";
+
+export const dynamic = "force-dynamic";
+
+function todayBoundsUtc(timezone: string) {
+  const now = new Date();
+  const localNow = toZonedTime(now, timezone);
+  return {
+    start: fromZonedTime(startOfDay(localNow), timezone),
+    end: fromZonedTime(endOfDay(localNow), timezone)
+  };
+}
 
 export default async function DashboardPage() {
   const session = await getServerSession(authOptions);
-  const firstName = session?.user?.name?.split(" ")[0] ?? "there";
+  if (!session?.user?.id) redirect("/login");
+
+  const user = await prisma.user.findUnique({
+    where: { id: session.user.id },
+    select: { name: true, timezone: true }
+  });
+  const tz = user?.timezone || env.DEFAULT_TIMEZONE;
+  const firstName = (user?.name ?? session.user.name)?.split(" ")[0] ?? "there";
+
+  const { start, end } = todayBoundsUtc(tz);
+
+  const [todayTasks, weekTasks, activeReminders] = await Promise.all([
+    listTodayTasks(session.user.id, start, end),
+    listWeekDeadlines(session.user.id),
+    listActiveReminders(session.user.id)
+  ]);
+
+  // Lazily populate tiny-first-step for any deadline-this-week task that qualifies.
+  const tinyMap = await populateTinyFirstSteps(
+    weekTasks.map((t) => ({
+      id: t.id,
+      status: t.status,
+      dueAt: t.dueAt,
+      updatedAt: t.updatedAt,
+      tinyFirstStep: t.tinyFirstStep
+    }))
+  );
 
   return (
     <div className="space-y-6">
       <div className="space-y-1">
         <h1 className="text-2xl font-semibold tracking-tight">Hey {firstName} 👋</h1>
         <p className="text-sm text-muted-foreground">
-          Your dashboard lives here. The real cards land in later phases — for now, this is the
-          shell you'll come home to.
+          Here's what's on your plate.
         </p>
       </div>
 
-      <div className="grid gap-4">
-        <PlaceholderCard
-          title="Today"
-          description="Your calendar and tasks for today will appear here once Google Calendar is connected (Phase 3) and you've added a few tasks (Phase 2)."
+      <ReminderBanners
+        reminders={activeReminders.map((r) => ({
+          id: r.id,
+          level: r.level,
+          fireAt: r.fireAt,
+          task: { id: r.task.id, title: r.task.title, dueAt: r.task.dueAt }
+        }))}
+      />
+
+      <div className="grid gap-4 md:grid-cols-2">
+        <TodayCard
+          items={todayTasks.map((t) => ({
+            id: t.id,
+            title: t.title,
+            dueAt: t.dueAt,
+            priority: t.priority
+          }))}
         />
-        <PlaceholderCard
-          title="Deadlines this week"
-          description="Visible countdowns, color-coded by urgency. Coming with the deadline pressure engine in Phase 2."
+        <DeadlinesCard
+          items={weekTasks
+            .filter((t): t is typeof t & { dueAt: Date } => t.dueAt !== null)
+            .map((t) => ({
+              id: t.id,
+              title: t.title,
+              dueAt: t.dueAt,
+              priority: t.priority,
+              tinyFirstStep: tinyMap.get(t.id) ?? null
+            }))}
         />
+      </div>
+
+      <div className="grid gap-4 md:grid-cols-2">
         <PlaceholderCard
           title="Money this month"
           description="Spending vs. budget, top categories, upcoming bills. Lands in Phase 4."
