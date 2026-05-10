@@ -1,3 +1,9 @@
+// Pinned locale so SSR and client render identical strings. Without this,
+// Node uses the system locale (e.g. nl-NL on the Amsterdam host renders
+// "100,00 €") while the browser uses its own (en-* renders "€100.00"),
+// triggering a hydration mismatch.
+const MONEY_LOCALE = "en-GB";
+
 /**
  * Format an integer-cents amount in the given ISO currency code.
  * Sign is preserved — negative values render with a leading minus.
@@ -6,7 +12,7 @@ export function formatCents(cents: number, currency: string): string {
   const sign = cents < 0 ? -1 : 1;
   const abs = Math.abs(cents);
   const value = (abs / 100) * sign;
-  return new Intl.NumberFormat(undefined, {
+  return new Intl.NumberFormat(MONEY_LOCALE, {
     style: "currency",
     currency,
     currencyDisplay: "symbol"
