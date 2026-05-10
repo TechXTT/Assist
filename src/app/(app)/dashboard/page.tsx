@@ -10,6 +10,7 @@ import { listTodayTasks, listWeekDeadlines } from "@/lib/tasks/task-queries";
 import { populateTinyFirstSteps } from "@/lib/tasks/tiny-first-step";
 import { listActiveReminders } from "@/lib/reminders/active";
 import { maybeSyncCalendar } from "@/lib/google/sync";
+import { moneyDashboardSummary } from "@/lib/money/dashboard-summary";
 import { ReminderBanners } from "@/components/reminder-banners";
 import { PlaceholderCard } from "@/components/placeholder-card";
 import {
@@ -18,6 +19,7 @@ import {
 } from "@/app/(app)/dashboard/_components/today-card";
 import { DeadlinesCard } from "@/app/(app)/dashboard/_components/deadlines-card";
 import { ReauthBanner } from "@/app/(app)/dashboard/_components/reauth-banner";
+import { MoneyThisMonthCard } from "@/app/(app)/dashboard/_components/money-this-month-card";
 
 export const dynamic = "force-dynamic";
 
@@ -54,29 +56,31 @@ export default async function DashboardPage() {
   // Trigger sync first (read-on-demand). Branches the rest of the render.
   const syncResult = await maybeSyncCalendar(userId);
 
-  const [todayTasks, weekTasks, activeReminders, todayEvents] = await Promise.all([
-    listTodayTasks(userId, start, end),
-    listWeekDeadlines(userId),
-    listActiveReminders(userId),
-    prisma.calendarEvent.findMany({
-      where: {
-        userId,
-        status: { not: "cancelled" },
-        startsAt: { lt: end },
-        endsAt: { gt: start }
-      },
-      orderBy: { startsAt: "asc" },
-      select: {
-        id: true,
-        title: true,
-        startsAt: true,
-        endsAt: true,
-        allDay: true,
-        location: true,
-        htmlLink: true
-      }
-    })
-  ]);
+  const [todayTasks, weekTasks, activeReminders, todayEvents, moneySummary] =
+    await Promise.all([
+      listTodayTasks(userId, start, end),
+      listWeekDeadlines(userId),
+      listActiveReminders(userId),
+      prisma.calendarEvent.findMany({
+        where: {
+          userId,
+          status: { not: "cancelled" },
+          startsAt: { lt: end },
+          endsAt: { gt: start }
+        },
+        orderBy: { startsAt: "asc" },
+        select: {
+          id: true,
+          title: true,
+          startsAt: true,
+          endsAt: true,
+          allDay: true,
+          location: true,
+          htmlLink: true
+        }
+      }),
+      moneyDashboardSummary(userId, tz, env.DEFAULT_CURRENCY)
+    ]);
 
   const tinyMap = await populateTinyFirstSteps(
     weekTasks.map((t) => ({
@@ -141,10 +145,7 @@ export default async function DashboardPage() {
       </div>
 
       <div className="grid gap-4 md:grid-cols-2">
-        <PlaceholderCard
-          title="Money this month"
-          description="Spending vs. budget, top categories, upcoming bills. Lands in Phase 4."
-        />
+        <MoneyThisMonthCard summary={moneySummary} currency={env.DEFAULT_CURRENCY} />
         <PlaceholderCard
           title="Health this week"
           description="Sleep average, exercise minutes, and a mood mini-trendline. Lands in Phase 5."
