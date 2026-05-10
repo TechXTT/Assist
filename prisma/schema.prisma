@@ -28,6 +28,7 @@ model User {
   accounts         Account[]
   sessions         Session[]
   tasks            Task[]
+  calendars        Calendar[]
   calendarEvents   CalendarEvent[]
   bills            Bill[]
   subscriptions    Subscription[]
@@ -101,10 +102,31 @@ model Task {
 
 // ----- Google Calendar -----
 
+model Calendar {
+  id               String   @id @default(cuid())
+  userId           String
+  googleCalendarId String
+  summary          String
+  description      String?
+  backgroundColor  String?
+  foregroundColor  String?
+  primary          Boolean  @default(false)
+  syncEnabled      Boolean  @default(true)
+  accessRole       String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  user   User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  events CalendarEvent[]
+
+  @@unique([userId, googleCalendarId])
+}
+
 model CalendarEvent {
   id            String   @id @default(cuid())
   userId        String
-  googleEventId String   @unique
+  calendarId    String
+  googleEventId String
   title         String
   startsAt      DateTime
   endsAt        DateTime
@@ -116,8 +138,10 @@ model CalendarEvent {
   timeZone      String?
   lastSyncedAt  DateTime @default(now())
 
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  calendar Calendar @relation(fields: [calendarId], references: [id], onDelete: Cascade)
 
+  @@unique([calendarId, googleEventId])
   @@index([userId, startsAt])
 }
 

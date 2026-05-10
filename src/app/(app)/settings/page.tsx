@@ -8,6 +8,11 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { ReauthBanner } from "@/app/(app)/dashboard/_components/reauth-banner";
 import { GoogleConnectionCard } from "@/app/(app)/settings/_components/google-connection-card";
 import { ConnectGoogleCard } from "@/app/(app)/settings/_components/connect-google-card";
+import { syncCalendar } from "@/lib/google/sync";
+import {
+  NotConnectedError,
+  ReauthRequiredError
+} from "@/lib/google/errors";
 
 export const dynamic = "force-dynamic";
 
@@ -35,6 +40,36 @@ export default async function SettingsPage() {
 
   const connected = googleAccount !== null;
 
+  // First connection / fresh DB: pull the calendar list eagerly so the
+  // settings page can render the toggles on the very first visit.
+  if (connected && !user.googleNeedsReauth && user.lastCalendarSyncAt === null) {
+    try {
+      await syncCalendar(session.user.id);
+    } catch (err) {
+      if (
+        !(err instanceof ReauthRequiredError) &&
+        !(err instanceof NotConnectedError)
+      ) {
+        console.error("[settings] initial sync failed:", err);
+      }
+    }
+  }
+
+  const calendars = connected
+    ? await prisma.calendar.findMany({
+        where: { userId: session.user.id },
+        orderBy: [{ primary: "desc" }, { summary: "asc" }],
+        select: {
+          id: true,
+          summary: true,
+          backgroundColor: true,
+          primary: true,
+          syncEnabled: true,
+          accessRole: true
+        }
+      })
+    : [];
+
   return (
     <div className="space-y-6">
       <div className="space-y-1">
@@ -50,6 +85,7 @@ export default async function SettingsPage() {
           <GoogleConnectionCard
             email={user.email}
             lastCalendarSyncAt={user.lastCalendarSyncAt}
+            calendars={calendars}
           />
         ) : (
           <ConnectGoogleCard />

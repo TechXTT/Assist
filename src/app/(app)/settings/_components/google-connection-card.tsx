@@ -9,6 +9,10 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { syncNowAction } from "@/app/(app)/settings/actions";
 import { DisconnectGoogleDialog } from "@/app/(app)/settings/_components/disconnect-google-dialog";
+import {
+  CalendarsList,
+  type CalendarRow
+} from "@/app/(app)/settings/_components/calendars-list";
 
 function lastSyncCopy(at: Date | null) {
   if (!at) return "Never synced yet.";
@@ -17,10 +21,12 @@ function lastSyncCopy(at: Date | null) {
 
 export function GoogleConnectionCard({
   email,
-  lastCalendarSyncAt
+  lastCalendarSyncAt,
+  calendars
 }: {
   email: string;
   lastCalendarSyncAt: Date | null;
+  calendars: CalendarRow[];
 }) {
   const [pending, start] = useTransition();
 
@@ -28,8 +34,12 @@ export function GoogleConnectionCard({
     start(async () => {
       const result = await syncNowAction();
       if (result.ok) {
-        const { added, updated, removed } = result.counts;
-        toast.success(`Synced — ${added} added, ${updated} updated, ${removed} removed.`);
+        const { added, updated, removed, calendarsSynced } = result.counts;
+        toast.success(
+          `Synced — ${added} added, ${updated} updated, ${removed} removed across ${calendarsSynced} calendar${
+            calendarsSynced === 1 ? "" : "s"
+          }.`
+        );
       } else {
         if (result.reason === "reauth") toast.message(result.message);
         else toast.error(result.message);
@@ -60,6 +70,16 @@ export function GoogleConnectionCard({
             <RefreshCw className={pending ? "h-4 w-4 animate-spin" : "h-4 w-4"} />
             {pending ? "Syncing…" : "Sync now"}
           </Button>
+        </div>
+
+        <div className="space-y-2 border-t pt-4">
+          <div className="space-y-0.5">
+            <h3 className="text-sm font-medium">Calendars</h3>
+            <p className="text-xs text-muted-foreground">
+              Toggle which calendars show up on your dashboard.
+            </p>
+          </div>
+          <CalendarsList calendars={calendars} />
         </div>
       </CardContent>
     </Card>
