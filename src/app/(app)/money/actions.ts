@@ -1035,19 +1035,21 @@ function buildDetailPatch(
     patch[key] = value;
   }
 
-  consume("rateBps", input.rateBps ?? null);
-  consume("originalPrincipalCents", input.originalPrincipalCents ?? null);
-  consume("monthlyPaymentCents", input.monthlyPaymentCents ?? null);
-  consume("loanTermMonths", input.loanTermMonths ?? null);
+  // Pass values through verbatim so undefined (field not sent) short-circuits
+  // the allowlist check. Coercing undefined → null here would make every
+  // submit look like a "clear this field" intent, triggering false rejections
+  // on fields the form never sent for this account type.
+  consume("rateBps", input.rateBps);
+  consume("originalPrincipalCents", input.originalPrincipalCents);
+  consume("monthlyPaymentCents", input.monthlyPaymentCents);
+  consume("loanTermMonths", input.loanTermMonths);
   consume(
     "loanStartedAt",
-    typeof input.loanStartedAt === "undefined"
-      ? undefined
-      : parseLoanStart(input.loanStartedAt ?? null)
+    typeof input.loanStartedAt === "undefined" ? undefined : parseLoanStart(input.loanStartedAt)
   );
-  consume("creditLimitCents", input.creditLimitCents ?? null);
-  consume("statementDay", input.statementDay ?? null);
-  consume("paymentDueDay", input.paymentDueDay ?? null);
+  consume("creditLimitCents", input.creditLimitCents);
+  consume("statementDay", input.statementDay);
+  consume("paymentDueDay", input.paymentDueDay);
   consume(
     "institution",
     typeof input.institution === "undefined" ? undefined : input.institution?.trim() || null
