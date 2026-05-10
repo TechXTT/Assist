@@ -106,6 +106,38 @@ const markIncomeReceivedSchema = z.object({
   receivedAt: z.string().optional()
 });
 
+const ACCOUNT_TYPE = z.enum([
+  "cash",
+  "savings",
+  "investment",
+  "crypto",
+  "credit",
+  "loan",
+  "other"
+]);
+
+const createFinancialAccountSchema = z.object({
+  name: z.string().trim().min(1, "Give it a name.").max(60),
+  type: ACCOUNT_TYPE,
+  isLiability: z.boolean(),
+  balanceCents: z.number().int().nonnegative().default(0),
+  currency: z.string().min(1).default(env.DEFAULT_CURRENCY),
+  notes: z.string().trim().max(500).optional().nullable()
+});
+
+const updateFinancialAccountSchema = z.object({
+  name: z.string().trim().min(1).max(60).optional(),
+  type: ACCOUNT_TYPE.optional(),
+  isLiability: z.boolean().optional(),
+  notes: z.string().trim().max(500).optional().nullable()
+});
+
+const updateAccountBalanceSchema = z.object({
+  newBalanceCents: z.number().int().nonnegative(),
+  takenAt: z.string().optional(),
+  note: z.string().trim().max(200).optional().nullable()
+});
+
 const createTransactionSchema = z.object({
   amountCents: z.number().int(),
   currency: z.string().min(1).default(env.DEFAULT_CURRENCY),
@@ -128,6 +160,9 @@ export type UpdateGoalInput = z.infer<typeof updateGoalSchema>;
 export type CreateIncomeSourceInput = z.infer<typeof createIncomeSourceSchema>;
 export type UpdateIncomeSourceInput = z.infer<typeof updateIncomeSourceSchema>;
 export type MarkIncomeReceivedInput = z.infer<typeof markIncomeReceivedSchema>;
+export type CreateFinancialAccountInput = z.infer<typeof createFinancialAccountSchema>;
+export type UpdateFinancialAccountInput = z.infer<typeof updateFinancialAccountSchema>;
+export type UpdateAccountBalanceInput = z.infer<typeof updateAccountBalanceSchema>;
 export type CreateTransactionInput = z.infer<typeof createTransactionSchema>;
 export type UpdateTransactionInput = z.infer<typeof updateTransactionSchema>;
 
@@ -154,6 +189,28 @@ async function requireOwnedTransaction(id: string, userId: string) {
   });
   if (!tx || tx.userId !== userId) throw new Error("Transaction not found.");
   return tx;
+}
+
+async function requireOwnedFinancialAccount(id: string, userId: string) {
+  const account = await prisma.financialAccount.findUnique({
+    where: { id },
+    select: { id: true, userId: true, name: true, balanceCents: true }
+  });
+  if (!account || account.userId !== userId) throw new Error("Account not found.");
+  return account;
+}
+
+async function requireOwnedSnapshot(id: string, userId: string) {
+  const snapshot = await prisma.balanceSnapshot.findUnique({
+    where: { id },
+    select: {
+      id: true,
+      account: { select: { id: true, userId: true } }
+    }
+  });
+  if (!snapshot || snapshot.account.userId !== userId)
+    throw new Error("Snapshot not found.");
+  return snapshot;
 }
 
 async function requireOwnedIncomeSource(id: string, userId: string) {
@@ -862,5 +919,126 @@ export async function deleteIncomeSource(id: string) {
   const session = await requireSession();
   await requireOwnedIncomeSource(id, session.user.id);
   await prisma.incomeSource.delete({ where: { id } });
+  revalidate();
+}
+
+// ----- Financial accounts (net worth) -----
+
+function parseTakenAt(input: string | null | undefined): Date {
+  if (!input) return new Date();
+  const d = new Date(input);
+  return Number.isNaN(d.getTime()) ? new Date() : d;
+}
+
+export async function createFinancialAccount(input: CreateFinancialAccountInput) {
+  const session = await requireSession();
+  const data = createFinancialAccountSchema.parse(input);
+  const now = new Date();
+
+  const created = await prisma.financialAccount.create({
+    data: {
+      userId: session.user.id,
+      name: data.name,
+      type: data.type,
+      isLiability: data.isLiability,
+      balanceCents: data.balanceCents,
+      currency: data.currency,
+      notes: data.notes?.trim() || null,
+      // Initial snapshot anchors the chart history.
+      snapshots: {
+        create: { balanceCents: data.balanceCents, takenAt: now }
+      }
+    }
+  });
+
+  revalidate();
+  return { id: created.id };
+}
+
+export async function updateFinancialAccount(
+  id: string,
+  input: UpdateFinancialAccountInput
+) {
+  const session = await requireSession();
+  const data = updateFinancialAccountSchema.parse(input);
+  await requireOwnedFinancialAccount(id, session.user.id);
+
+  await prisma.financialAccount.update({
+    where: { id },
+    data: {
+      ...(typeof data.name === "string" && { name: data.name }),
+      ...(typeof data.type === "string" && { type: data.type }),
+      ...(typeof data.isLiability === "boolean" && { isLiability: data.isLiability }),
+      ...(typeof data.notes !== "undefined" && { notes: data.notes?.trim() || null })
+    }
+  });
+  revalidate();
+}
+
+export async function updateAccountBalance(
+  id: string,
+  input: UpdateAccountBalanceInput
+): Promise<{ previousCents: number; nextCents: number }> {
+  const session = await requireSession();
+  const data = updateAccountBalanceSchema.parse(input);
+  const account = await requireOwnedFinancialAccount(id, session.user.id);
+  const takenAt = parseTakenAt(data.takenAt);
+
+  await prisma.$transaction([
+    prisma.financialAccount.update({
+      where: { id },
+      data: { balanceCents: data.newBalanceCents }
+    }),
+    prisma.balanceSnapshot.create({
+      data: {
+        accountId: id,
+        balanceCents: data.newBalanceCents,
+        takenAt,
+        note: data.note?.trim() || null
+      }
+    })
+  ]);
+
+  revalidate();
+  return { previousCents: account.balanceCents, nextCents: data.newBalanceCents };
+}
+
+export async function archiveFinancialAccount(id: string) {
+  const session = await requireSession();
+  await requireOwnedFinancialAccount(id, session.user.id);
+  await prisma.financialAccount.update({ where: { id }, data: { archived: true } });
+  revalidate();
+}
+
+export async function unarchiveFinancialAccount(id: string) {
+  const session = await requireSession();
+  await requireOwnedFinancialAccount(id, session.user.id);
+  await prisma.financialAccount.update({ where: { id }, data: { archived: false } });
+  revalidate();
+}
+
+export async function setIncludeInNetWorth(id: string, included: boolean) {
+  const session = await requireSession();
+  await requireOwnedFinancialAccount(id, session.user.id);
+  await prisma.financialAccount.update({
+    where: { id },
+    data: { includeInNetWorth: included }
+  });
+  revalidate();
+}
+
+export async function deleteSnapshot(id: string) {
+  const session = await requireSession();
+  await requireOwnedSnapshot(id, session.user.id);
+  // Per the brief: deletion doesn't auto-rewind Account.balanceCents.
+  await prisma.balanceSnapshot.delete({ where: { id } });
+  revalidate();
+}
+
+export async function deleteFinancialAccount(id: string) {
+  const session = await requireSession();
+  await requireOwnedFinancialAccount(id, session.user.id);
+  // Cascade in schema removes snapshots.
+  await prisma.financialAccount.delete({ where: { id } });
   revalidate();
 }

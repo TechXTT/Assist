@@ -6,11 +6,17 @@ import { toZonedTime } from "date-fns-tz";
 import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { env } from "@/lib/env";
+import { listFinancialAccounts } from "@/lib/money/account-queries";
 import { listBills } from "@/lib/money/bill-queries";
 import { listBudgets } from "@/lib/money/budget-queries";
 import { listCategories } from "@/lib/money/category-queries";
 import { listGoals } from "@/lib/money/goal-queries";
 import { listIncomeSources } from "@/lib/money/income-queries";
+import {
+  calculateNetWorth,
+  netWorthAtDate,
+  netWorthHistory
+} from "@/lib/money/networth";
 import { listSubscriptions } from "@/lib/money/subscription-queries";
 import {
   listTransactions,
@@ -28,6 +34,7 @@ import { BudgetsTab } from "@/app/(app)/money/_components/budgets/budgets-tab";
 import { BillsAndSubsTab } from "@/app/(app)/money/_components/bills-and-subs/bills-and-subs-tab";
 import { IncomeTab } from "@/app/(app)/money/_components/income/income-tab";
 import { GoalsTab } from "@/app/(app)/money/_components/goals/goals-tab";
+import { NetworthTab } from "@/app/(app)/money/_components/networth/networth-tab";
 
 export const dynamic = "force-dynamic";
 
@@ -45,7 +52,8 @@ function readTab(value: string | undefined): MoneyTab {
     value === "budgets" ||
     value === "bills" ||
     value === "income" ||
-    value === "goals"
+    value === "goals" ||
+    value === "networth"
   )
     return value;
   return "spending";
@@ -121,7 +129,12 @@ export default async function MoneyPage({
     subscriptions,
     goals,
     incomeSources,
-    incomeMonth
+    incomeMonth,
+    financialAccounts,
+    networth,
+    history,
+    startOfMonthNet,
+    allSnapshots
   ] = await Promise.all([
     listCategories(session.user.id, { includeArchived: false }),
     listCategories(session.user.id, { includeArchived: true }),
@@ -137,8 +150,26 @@ export default async function MoneyPage({
     listSubscriptions(session.user.id),
     listGoals(session.user.id, { includeArchived: true }),
     listIncomeSources(session.user.id, { includeArchived: true }),
-    monthlyIncomeSummary(session.user.id, month.start, month.end)
+    monthlyIncomeSummary(session.user.id, month.start, month.end),
+    listFinancialAccounts(session.user.id, { includeArchived: true }),
+    calculateNetWorth(session.user.id),
+    netWorthHistory(session.user.id),
+    netWorthAtDate(session.user.id, month.start),
+    prisma.balanceSnapshot.findMany({
+      where: { account: { userId: session.user.id } },
+      orderBy: { takenAt: "desc" },
+      select: {
+        id: true,
+        accountId: true,
+        balanceCents: true,
+        takenAt: true,
+        note: true
+      }
+    })
   ]);
+
+  const deltaThisMonthCents =
+    startOfMonthNet === null ? 0 : networth.totalCents - startOfMonthNet;
 
   // Categories without an active budget — used by the budget-form picker.
   const budgetedNames = new Set(budgets.map((b) => b.name));
@@ -190,6 +221,18 @@ export default async function MoneyPage({
         }
         income={<IncomeTab sources={incomeSources} currency={currency} />}
         goals={<GoalsTab goals={goals} currency={currency} />}
+        networth={
+          <NetworthTab
+            accounts={financialAccounts}
+            snapshots={allSnapshots}
+            history={history}
+            totalCents={networth.totalCents}
+            assetCents={networth.assetCents}
+            liabilityCents={networth.liabilityCents}
+            deltaThisMonthCents={deltaThisMonthCents}
+            currency={currency}
+          />
+        }
       />
     </div>
   );

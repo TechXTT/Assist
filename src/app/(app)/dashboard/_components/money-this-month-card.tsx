@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { format } from "date-fns";
-import { Receipt, Target, Wallet } from "lucide-react";
+import { ArrowDown, ArrowUp, LineChart, Receipt, Target, Wallet } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -197,6 +197,46 @@ export function MoneyThisMonthCard({
                   </span>
                   <span className="shrink-0 text-muted-foreground">
                     {format(summary.nextIncome.expectedAt, "d MMM")}
+                  </span>
+                </Link>
+              )}
+
+              {summary.netWorth && (
+                <Link
+                  href="/money?tab=networth"
+                  onClick={(e) => e.stopPropagation()}
+                  className="flex items-center gap-2 rounded-md px-2 py-1.5 hover:bg-muted/60"
+                >
+                  <LineChart className="h-3.5 w-3.5 text-muted-foreground" aria-hidden />
+                  <span className="flex-1">
+                    Net worth:{" "}
+                    <span
+                      className={cn(
+                        "font-medium tabular-nums",
+                        summary.netWorth.totalCents < 0 &&
+                          "text-amber-700 dark:text-amber-400"
+                      )}
+                    >
+                      {formatCents(summary.netWorth.totalCents, currency)}
+                    </span>
+                    {summary.netWorth.deltaThisMonthCents !== 0 && (
+                      <>
+                        {" "}
+                        ·{" "}
+                        {summary.netWorth.deltaThisMonthCents > 0 ? (
+                          <ArrowUp className="inline h-3 w-3" aria-hidden />
+                        ) : (
+                          <ArrowDown className="inline h-3 w-3" aria-hidden />
+                        )}{" "}
+                        <span className="tabular-nums">
+                          {formatCents(
+                            Math.abs(summary.netWorth.deltaThisMonthCents),
+                            currency
+                          )}
+                        </span>{" "}
+                        this month
+                      </>
+                    )}
                   </span>
                 </Link>
               )}

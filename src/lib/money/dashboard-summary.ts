@@ -3,6 +3,7 @@ import { listBudgets, type BudgetWithProgress } from "@/lib/money/budget-queries
 import { currentMonth, daysRemainingInMonth } from "@/lib/money/period";
 import { listBills } from "@/lib/money/bill-queries";
 import { nextExpectedSoon } from "@/lib/money/income-queries";
+import { netWorthDashboardSummary } from "@/lib/money/networth";
 
 export type DashboardMoneySummary = {
   totalSpentCents: number;
@@ -15,6 +16,7 @@ export type DashboardMoneySummary = {
   net: { netCents: number; inCents: number; outCents: number };
   hasIncomeActivity: boolean;
   nextIncome: { name: string; amountCents: number; expectedAt: Date } | null;
+  netWorth: { totalCents: number; deltaThisMonthCents: number } | null;
 };
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -36,7 +38,8 @@ export async function moneyDashboardSummary(
     netAggregate,
     incomeAggregate,
     activeIncomeCount,
-    nextIncomeRow
+    nextIncomeRow,
+    netWorth
   ] = await Promise.all([
     listBudgets(userId, timezone, now),
     prisma.transaction.groupBy({
@@ -70,7 +73,8 @@ export async function moneyDashboardSummary(
       _count: true
     }),
     prisma.incomeSource.count({ where: { userId, active: true } }),
-    nextExpectedSoon(userId, 30, now)
+    nextExpectedSoon(userId, 30, now),
+    netWorthDashboardSummary(userId, timezone, now)
   ]);
 
   const limitByName = new Map(
@@ -138,6 +142,7 @@ export async function moneyDashboardSummary(
     daysRemaining: daysRemainingInMonth(timezone, now),
     net: { netCents, inCents, outCents },
     hasIncomeActivity,
-    nextIncome
+    nextIncome,
+    netWorth
   };
 }
