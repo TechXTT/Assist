@@ -67,6 +67,19 @@ const createSubscriptionSchema = z.object({
 
 const updateSubscriptionSchema = createSubscriptionSchema.partial();
 
+const createGoalSchema = z.object({
+  name: z.string().trim().min(1, "Give it a name.").max(60),
+  targetCents: z.number().int().positive("Set a target above zero."),
+  targetDate: z.string().optional().nullable(),
+  notes: z.string().trim().max(500).optional().nullable()
+});
+
+const updateGoalSchema = createGoalSchema.partial();
+
+const addToGoalSchema = z.object({
+  cents: z.number().int().positive("Save more than zero.")
+});
+
 const createTransactionSchema = z.object({
   amountCents: z.number().int(),
   currency: z.string().min(1).default(env.DEFAULT_CURRENCY),
@@ -84,6 +97,8 @@ export type CreateBillInput = z.infer<typeof createBillSchema>;
 export type UpdateBillInput = z.infer<typeof updateBillSchema>;
 export type CreateSubscriptionInput = z.infer<typeof createSubscriptionSchema>;
 export type UpdateSubscriptionInput = z.infer<typeof updateSubscriptionSchema>;
+export type CreateGoalInput = z.infer<typeof createGoalSchema>;
+export type UpdateGoalInput = z.infer<typeof updateGoalSchema>;
 export type CreateTransactionInput = z.infer<typeof createTransactionSchema>;
 export type UpdateTransactionInput = z.infer<typeof updateTransactionSchema>;
 
@@ -110,6 +125,15 @@ async function requireOwnedTransaction(id: string, userId: string) {
   });
   if (!tx || tx.userId !== userId) throw new Error("Transaction not found.");
   return tx;
+}
+
+async function requireOwnedGoal(id: string, userId: string) {
+  const goal = await prisma.savingsGoal.findUnique({
+    where: { id },
+    select: { id: true, userId: true, targetCents: true, savedCents: true }
+  });
+  if (!goal || goal.userId !== userId) throw new Error("Goal not found.");
+  return goal;
 }
 
 async function requireOwnedSubscription(id: string, userId: string) {
@@ -576,5 +600,82 @@ export async function deleteSubscription(id: string) {
   const session = await requireSession();
   await requireOwnedSubscription(id, session.user.id);
   await prisma.subscription.delete({ where: { id } });
+  revalidate();
+}
+
+// ----- Savings goals -----
+
+function parseTargetDate(input: string | null | undefined): Date | null {
+  if (!input) return null;
+  const d = new Date(input);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+export async function createGoal(input: CreateGoalInput) {
+  const session = await requireSession();
+  const data = createGoalSchema.parse(input);
+
+  const created = await prisma.savingsGoal.create({
+    data: {
+      userId: session.user.id,
+      name: data.name,
+      targetCents: data.targetCents,
+      targetDate: parseTargetDate(data.targetDate),
+      notes: data.notes?.trim() || null
+    }
+  });
+  revalidate();
+  return { id: created.id };
+}
+
+export async function updateGoal(id: string, input: UpdateGoalInput) {
+  const session = await requireSession();
+  const data = updateGoalSchema.parse(input);
+  await requireOwnedGoal(id, session.user.id);
+
+  await prisma.savingsGoal.update({
+    where: { id },
+    data: {
+      ...(typeof data.name === "string" && { name: data.name }),
+      ...(typeof data.targetCents === "number" && { targetCents: data.targetCents }),
+      ...(typeof data.targetDate !== "undefined" && {
+        targetDate: parseTargetDate(data.targetDate)
+      }),
+      ...(typeof data.notes !== "undefined" && { notes: data.notes?.trim() || null })
+    }
+  });
+  revalidate();
+}
+
+export async function addToGoal(id: string, cents: number) {
+  const session = await requireSession();
+  addToGoalSchema.parse({ cents });
+  const goal = await requireOwnedGoal(id, session.user.id);
+
+  await prisma.savingsGoal.update({
+    where: { id },
+    data: { savedCents: goal.savedCents + cents }
+  });
+  revalidate();
+}
+
+export async function archiveGoal(id: string) {
+  const session = await requireSession();
+  await requireOwnedGoal(id, session.user.id);
+  await prisma.savingsGoal.update({ where: { id }, data: { archived: true } });
+  revalidate();
+}
+
+export async function unarchiveGoal(id: string) {
+  const session = await requireSession();
+  await requireOwnedGoal(id, session.user.id);
+  await prisma.savingsGoal.update({ where: { id }, data: { archived: false } });
+  revalidate();
+}
+
+export async function deleteGoal(id: string) {
+  const session = await requireSession();
+  await requireOwnedGoal(id, session.user.id);
+  await prisma.savingsGoal.delete({ where: { id } });
   revalidate();
 }
