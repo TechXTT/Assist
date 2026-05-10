@@ -8,6 +8,7 @@ import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { env } from "@/lib/env";
 import { nextDueAt } from "@/lib/money/bill-utils";
+import { advanceCycle } from "@/lib/money/subscription-utils";
 import {
   deleteRemindersForBill,
   upsertReminderForBill
@@ -55,6 +56,17 @@ const createBillSchema = z
 
 const updateBillSchema = createBillSchema.innerType().partial();
 
+const createSubscriptionSchema = z.object({
+  name: z.string().trim().min(1, "Give it a name.").max(60),
+  amountCents: z.number().int().positive("Set an amount above zero."),
+  currency: z.string().min(1).default(env.DEFAULT_CURRENCY),
+  billingCycle: z.enum(["monthly", "annual"]),
+  nextChargeAt: z.string().min(1, "Pick a date."),
+  category: z.string().trim().max(40).optional().nullable()
+});
+
+const updateSubscriptionSchema = createSubscriptionSchema.partial();
+
 const createTransactionSchema = z.object({
   amountCents: z.number().int(),
   currency: z.string().min(1).default(env.DEFAULT_CURRENCY),
@@ -70,6 +82,8 @@ export type CreateBudgetInput = z.infer<typeof createBudgetSchema>;
 export type UpdateBudgetInput = z.infer<typeof updateBudgetSchema>;
 export type CreateBillInput = z.infer<typeof createBillSchema>;
 export type UpdateBillInput = z.infer<typeof updateBillSchema>;
+export type CreateSubscriptionInput = z.infer<typeof createSubscriptionSchema>;
+export type UpdateSubscriptionInput = z.infer<typeof updateSubscriptionSchema>;
 export type CreateTransactionInput = z.infer<typeof createTransactionSchema>;
 export type UpdateTransactionInput = z.infer<typeof updateTransactionSchema>;
 
@@ -96,6 +110,20 @@ async function requireOwnedTransaction(id: string, userId: string) {
   });
   if (!tx || tx.userId !== userId) throw new Error("Transaction not found.");
   return tx;
+}
+
+async function requireOwnedSubscription(id: string, userId: string) {
+  const sub = await prisma.subscription.findUnique({
+    where: { id },
+    select: {
+      id: true,
+      userId: true,
+      billingCycle: true,
+      nextChargeAt: true
+    }
+  });
+  if (!sub || sub.userId !== userId) throw new Error("Subscription not found.");
+  return sub;
 }
 
 async function requireOwnedBill(id: string, userId: string) {
@@ -450,5 +478,103 @@ export async function deleteBill(id: string) {
   await requireOwnedBill(id, session.user.id);
   await deleteRemindersForBill(id);
   await prisma.bill.delete({ where: { id } });
+  revalidate();
+}
+
+// ----- Subscriptions -----
+
+function parseChargeAt(input: string): Date {
+  const d = new Date(input);
+  if (Number.isNaN(d.getTime())) throw new Error("Invalid date.");
+  return d;
+}
+
+export async function createSubscription(input: CreateSubscriptionInput) {
+  const session = await requireSession();
+  const data = createSubscriptionSchema.parse(input);
+
+  const created = await prisma.subscription.create({
+    data: {
+      userId: session.user.id,
+      name: data.name,
+      amountCents: data.amountCents,
+      currency: data.currency,
+      billingCycle: data.billingCycle,
+      nextChargeAt: parseChargeAt(data.nextChargeAt),
+      category: data.category?.trim() || null,
+      source: "manual"
+    }
+  });
+  revalidate();
+  return { id: created.id };
+}
+
+export async function updateSubscription(id: string, input: UpdateSubscriptionInput) {
+  const session = await requireSession();
+  const data = updateSubscriptionSchema.parse(input);
+  await requireOwnedSubscription(id, session.user.id);
+
+  await prisma.subscription.update({
+    where: { id },
+    data: {
+      ...(typeof data.name === "string" && { name: data.name }),
+      ...(typeof data.amountCents === "number" && { amountCents: data.amountCents }),
+      ...(typeof data.currency === "string" && { currency: data.currency }),
+      ...(typeof data.billingCycle === "string" && { billingCycle: data.billingCycle }),
+      ...(typeof data.nextChargeAt === "string" && {
+        nextChargeAt: parseChargeAt(data.nextChargeAt)
+      }),
+      ...(typeof data.category !== "undefined" && {
+        category: data.category?.trim() || null
+      })
+    }
+  });
+  revalidate();
+}
+
+export async function markSubscriptionCharged(id: string) {
+  const session = await requireSession();
+  const sub = await requireOwnedSubscription(id, session.user.id);
+  const next = advanceCycle(sub.nextChargeAt, sub.billingCycle);
+  await prisma.subscription.update({
+    where: { id },
+    data: { nextChargeAt: next }
+  });
+  revalidate();
+}
+
+export async function setSubscriptionUnused(id: string, unused: boolean) {
+  const session = await requireSession();
+  await requireOwnedSubscription(id, session.user.id);
+  await prisma.subscription.update({
+    where: { id },
+    data: {
+      userMarkedUnused: unused,
+      // Clearing the flag also clears the snooze timestamp so the hint
+      // doesn't surface stale data if the user toggles back later.
+      ...(unused ? {} : { lastReminderShownAt: null })
+    }
+  });
+  revalidate();
+}
+
+/**
+ * Snooze the cancel hint for ~one cycle. Set when user clicks "Yeah, I'll
+ * cancel" — the hint stays gone for 30 days, then resurfaces.
+ */
+export async function snoozeCancelHint(id: string) {
+  const session = await requireSession();
+  await requireOwnedSubscription(id, session.user.id);
+  await prisma.subscription.update({
+    where: { id },
+    data: { lastReminderShownAt: new Date() }
+  });
+  revalidate();
+}
+
+export async function deleteSubscription(id: string) {
+  const session = await requireSession();
+  await requireOwnedSubscription(id, session.user.id);
+  await prisma.subscription.delete({ where: { id } });
   revalidate();
 }

@@ -9,6 +9,7 @@ import { env } from "@/lib/env";
 import { listBills } from "@/lib/money/bill-queries";
 import { listBudgets } from "@/lib/money/budget-queries";
 import { listCategories } from "@/lib/money/category-queries";
+import { listSubscriptions } from "@/lib/money/subscription-queries";
 import {
   listTransactions,
   monthlyBreakdown
@@ -22,7 +23,6 @@ import { ComingSoon } from "@/app/(app)/money/_components/coming-soon";
 import { SpendingTab } from "@/app/(app)/money/_components/spending/spending-tab";
 import { BudgetsTab } from "@/app/(app)/money/_components/budgets/budgets-tab";
 import { BillsAndSubsTab } from "@/app/(app)/money/_components/bills-and-subs/bills-and-subs-tab";
-import { SubsComingSoon } from "@/app/(app)/money/_components/bills-and-subs/subs-coming-soon";
 
 export const dynamic = "force-dynamic";
 
@@ -92,19 +92,27 @@ export default async function MoneyPage({
     .map((s) => s.trim())
     .filter(Boolean);
 
-  const [activeCategories, allCategories, transactions, breakdown, budgets, bills] =
-    await Promise.all([
-      listCategories(session.user.id, { includeArchived: false }),
-      listCategories(session.user.id, { includeArchived: true }),
-      listTransactions(session.user.id, {
-        from: range.start,
-        to: range.end,
-        categoryNames: selectedCategoryNames.length > 0 ? selectedCategoryNames : undefined
-      }),
-      monthlyBreakdown(session.user.id, tz),
-      listBudgets(session.user.id, tz),
-      listBills(session.user.id, tz)
-    ]);
+  const [
+    activeCategories,
+    allCategories,
+    transactions,
+    breakdown,
+    budgets,
+    bills,
+    subscriptions
+  ] = await Promise.all([
+    listCategories(session.user.id, { includeArchived: false }),
+    listCategories(session.user.id, { includeArchived: true }),
+    listTransactions(session.user.id, {
+      from: range.start,
+      to: range.end,
+      categoryNames: selectedCategoryNames.length > 0 ? selectedCategoryNames : undefined
+    }),
+    monthlyBreakdown(session.user.id, tz),
+    listBudgets(session.user.id, tz),
+    listBills(session.user.id, tz),
+    listSubscriptions(session.user.id)
+  ]);
 
   // Categories without an active budget — used by the budget-form picker.
   const budgetedNames = new Set(budgets.map((b) => b.name));
@@ -146,9 +154,9 @@ export default async function MoneyPage({
         bills={
           <BillsAndSubsTab
             bills={bills}
+            subscriptions={subscriptions}
             categories={activeCategories}
             currency={currency}
-            subsSection={<SubsComingSoon />}
           />
         }
         goals={

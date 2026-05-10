@@ -1,20 +1,21 @@
-import type { ReactNode } from "react";
-
 import { BillsList } from "@/app/(app)/money/_components/bills-and-subs/bills/bills-list";
 import { AddBillButton } from "@/app/(app)/money/_components/bills-and-subs/bills/add-bill-button";
+import { AddSubButton } from "@/app/(app)/money/_components/bills-and-subs/subs/add-sub-button";
+import { SubsList } from "@/app/(app)/money/_components/bills-and-subs/subs/subs-list";
 import type { BillRow } from "@/lib/money/bill-queries";
 import type { CategoryRow } from "@/lib/money/category-queries";
+import type { SubscriptionRow } from "@/lib/money/subscription-queries";
 
 export function BillsAndSubsTab({
   bills,
+  subscriptions,
   categories,
-  currency,
-  subsSection
+  currency
 }: {
   bills: BillRow[];
+  subscriptions: SubscriptionRow[];
   categories: CategoryRow[];
   currency: string;
-  subsSection: ReactNode;
 }) {
   return (
     <div className="space-y-8">
@@ -32,11 +33,14 @@ export function BillsAndSubsTab({
       </section>
 
       <section className="space-y-3">
-        <div>
-          <h2 className="text-sm font-medium">Subscriptions</h2>
-          <p className="text-xs text-muted-foreground">The ones that nibble at your card.</p>
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <h2 className="text-sm font-medium">Subscriptions</h2>
+            <p className="text-xs text-muted-foreground">The ones that nibble at your card.</p>
+          </div>
+          <AddSubButton categories={categories} currency={currency} />
         </div>
-        {subsSection}
+        <SubsList subs={subscriptions} categories={categories} currency={currency} />
       </section>
     </div>
   );
