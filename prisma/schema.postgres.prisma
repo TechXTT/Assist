@@ -1,0 +1,463 @@
+// Personal-life assistant — single-user. PRODUCTION variant.
+// This is the Postgres-ready schema. To deploy:
+//   1. cp prisma/schema.postgres.prisma prisma/schema.prisma
+//   2. rm -rf prisma/migrations prisma/dev.db
+//   3. npx prisma migrate dev --name init_postgres   (against Neon dev URL)
+//   4. commit the regenerated migrations directory
+//   5. push, deploy
+// See DEPLOY.md for the full procedure.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// ----- Auth (NextAuth + @next-auth/prisma-adapter shape) -----
+
+model User {
+  id                              String    @id @default(cuid())
+  email                           String    @unique
+  name                            String?
+  image                           String?
+  timezone                        String    @default("Europe/Amsterdam")
+  briefingTime                    String    @default("11:00")
+  emailVerified                   DateTime?
+  createdAt                       DateTime  @default(now())
+  lastCalendarSyncAt              DateTime?
+  googleNeedsReauth               Boolean   @default(false)
+  cashFlowHorizonDays             Int       @default(30)
+  cashFlowTightThresholdCents     Int       @default(10000)
+  cashFlowIncludeDiscretionary    Boolean   @default(true)
+  cashFlowDiscretionaryDailyCents Int?
+
+  // Health prefs
+  weeklyExerciseTargetMinutes Int       @default(90)
+  sleepTargetHours            Float?
+  targetBedtime               String?
+  windDownEnabled             Boolean   @default(false)
+  windDownMinutesBefore       Int       @default(30)
+  lastWindDownDismissedOn     DateTime?
+
+  // AI cap — euros (or USD) in integer cents per month
+  aiMonthlyCapCents           Int       @default(500)
+
+  accounts          Account[]
+  sessions          Session[]
+  tasks             Task[]
+  calendars         Calendar[]
+  calendarEvents    CalendarEvent[]
+  bills             Bill[]
+  subscriptions     Subscription[]
+  incomeSources     IncomeSource[]
+  financialAccounts FinancialAccount[]
+  transactions      Transaction[]
+  budgetCategories  BudgetCategory[]
+  savingsGoals      SavingsGoal[]
+  habitLogs         HabitLog[]
+  exercisePlans     ExercisePlan[]
+  exerciseSessions  ExerciseSession[]
+  reminders         Reminder[]
+  dailyBriefings    DailyBriefing[]
+  weeklyReviews     WeeklyReview[]
+  aiCalls           AiCall[]
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String?
+  access_token      String?
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String?
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
+// ----- Tasks & deadlines -----
+
+model Task {
+  id            String    @id @default(cuid())
+  userId        String
+  title         String
+  description   String?
+  dueAt         DateTime?
+  priority      String    @default("med")
+  status        String    @default("todo")
+  source        String    @default("manual")
+  externalId    String?
+  tinyFirstStep String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  completedAt   DateTime?
+
+  user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  reminders Reminder[]
+
+  @@index([userId, status])
+  @@index([userId, dueAt])
+}
+
+// ----- Google Calendar -----
+
+model Calendar {
+  id               String   @id @default(cuid())
+  userId           String
+  googleCalendarId String
+  summary          String
+  description      String?
+  backgroundColor  String?
+  foregroundColor  String?
+  primary          Boolean  @default(false)
+  syncEnabled      Boolean  @default(true)
+  accessRole       String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  user   User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  events CalendarEvent[]
+
+  @@unique([userId, googleCalendarId])
+}
+
+model CalendarEvent {
+  id            String   @id @default(cuid())
+  userId        String
+  calendarId    String
+  googleEventId String
+  title         String
+  startsAt      DateTime
+  endsAt        DateTime
+  location      String?
+  description   String?
+  allDay        Boolean  @default(false)
+  htmlLink      String?
+  status        String   @default("confirmed")
+  timeZone      String?
+  lastSyncedAt  DateTime @default(now())
+
+  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  calendar Calendar @relation(fields: [calendarId], references: [id], onDelete: Cascade)
+
+  @@unique([calendarId, googleEventId])
+  @@index([userId, startsAt])
+}
+
+// ----- Money -----
+
+model Bill {
+  id              String    @id @default(cuid())
+  userId          String
+  name            String
+  amountCents     Int
+  currency        String    @default("EUR")
+  dueDay          Int?
+  dueDate         DateTime?
+  recurring       Boolean   @default(true)
+  category        String?
+  lastPaidAt      DateTime?
+  reminderEnabled Boolean   @default(true)
+  notes           String?
+  source          String    @default("manual")
+  externalId      String?
+
+  user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  reminders Reminder[]
+}
+
+model Subscription {
+  id                   String    @id @default(cuid())
+  userId               String
+  name                 String
+  amountCents          Int
+  currency             String    @default("EUR")
+  billingCycle         String
+  nextChargeAt         DateTime
+  category             String?
+  suspectedUnused      Boolean   @default(false)
+  userMarkedUnused     Boolean   @default(false)
+  lastReminderShownAt  DateTime?
+  source               String    @default("manual")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model IncomeSource {
+  id                  String    @id @default(cuid())
+  userId              String
+  name                String
+  expectedAmountCents Int
+  currency            String    @default("EUR")
+  cadence             String
+  cadenceAnchorDay    Int?
+  nextExpectedAt      DateTime
+  category            String    @default("Income")
+  source              String    @default("manual")
+  active              Boolean   @default(true)
+  lastReceivedAt      DateTime?
+  notes               String?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, active, nextExpectedAt])
+}
+
+model FinancialAccount {
+  id                     String   @id @default(cuid())
+  userId                 String
+  name                   String
+  type                   String
+  isLiability            Boolean  @default(false)
+  balanceCents           Int      @default(0)
+  currency               String   @default("EUR")
+  includeInNetWorth      Boolean  @default(true)
+  archived               Boolean  @default(false)
+  notes                  String?
+  includeInCashFlow      Boolean  @default(true)
+
+  // Shared rate field — APY for savings, APR for credit + loan. Basis points.
+  rateBps                Int?
+
+  // Loan-specific
+  originalPrincipalCents Int?
+  monthlyPaymentCents    Int?
+  loanTermMonths         Int?
+  loanStartedAt          DateTime?
+
+  // Credit-specific
+  creditLimitCents       Int?
+  statementDay           Int?
+  paymentDueDay          Int?
+
+  // Shared optional label
+  institution            String?
+
+  // Investment + crypto
+  trackHoldings          Boolean  @default(false)
+
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+
+  user      User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  snapshots BalanceSnapshot[]
+  holdings  Holding[]
+
+  @@index([userId, archived, includeInNetWorth])
+}
+
+model Holding {
+  id                  String   @id @default(cuid())
+  accountId           String
+  ticker              String
+  name                String?
+  shares              Decimal  @db.Decimal(20, 10)
+  avgCostCents        Int?
+  lastKnownPriceCents Int
+  lastPriceUpdate     DateTime @default(now())
+  notes               String?
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  account FinancialAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  @@index([accountId])
+}
+
+model BalanceSnapshot {
+  id           String   @id @default(cuid())
+  accountId    String
+  balanceCents Int
+  takenAt      DateTime @default(now())
+  note         String?
+  createdAt    DateTime @default(now())
+
+  account FinancialAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  @@index([accountId, takenAt])
+}
+
+model Transaction {
+  id          String   @id @default(cuid())
+  userId      String
+  amountCents Int
+  currency    String   @default("EUR")
+  description String
+  category    String?
+  occurredAt  DateTime
+  source      String   @default("manual")
+  externalId  String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, occurredAt])
+}
+
+model BudgetCategory {
+  id                String  @id @default(cuid())
+  userId            String
+  name              String
+  monthlyLimitCents Int
+  color             String  @default("#7c9885")
+  archived          Boolean @default(false)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, name])
+}
+
+model SavingsGoal {
+  id          String    @id @default(cuid())
+  userId      String
+  name        String
+  targetCents Int
+  savedCents  Int       @default(0)
+  targetDate  DateTime?
+  notes       String?
+  archived    Boolean   @default(false)
+  createdAt   DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+// ----- Health -----
+
+model HabitLog {
+  id              String   @id @default(cuid())
+  userId          String
+  date            DateTime
+  sleepHours      Float?
+  exerciseMinutes Int?
+  mealsLogged     Int      @default(0)
+  waterGlasses    Int      @default(0)
+  mood            Int?
+  notes           String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, date])
+}
+
+model ExercisePlan {
+  id                  String @id @default(cuid())
+  userId              String
+  name                String
+  weeklyTargetMinutes Int    @default(90)
+  // Array of weekday abbreviations e.g. ["Mon","Wed","Fri"].
+  // Stored as JSON text for code-compat parity with the SQLite dev schema.
+  // Future cleanup: switch to native Json type for indexability.
+  days                String
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model ExerciseSession {
+  id         String   @id @default(cuid())
+  userId     String
+  activity   String
+  minutes    Int
+  occurredAt DateTime
+  notes      String?
+  createdAt  DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, occurredAt])
+}
+
+// ----- Briefings, Reviews, AI -----
+
+model DailyBriefing {
+  id          String   @id @default(cuid())
+  userId      String
+  forDate     DateTime
+  body        String
+  generatedBy String
+  modelUsed   String?
+  generatedAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, forDate])
+}
+
+model WeeklyReview {
+  id            String   @id @default(cuid())
+  userId        String
+  forWeekStart  DateTime
+  body          String
+  generatedBy   String
+  modelUsed     String?
+  generatedAt   DateTime @default(now())
+  // Array of task ids picked as top priorities for the following week.
+  // Stored as JSON text for code-compat parity with the SQLite dev schema.
+  // Future cleanup: switch to native Json type for indexability.
+  topPriorities String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, forWeekStart])
+}
+
+model AiCall {
+  id                 String   @id @default(cuid())
+  userId             String
+  feature            String
+  model              String
+  promptTokens       Int
+  completionTokens   Int
+  estimatedCostCents Int
+  occurredAt         DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, occurredAt])
+}
+
+// ----- Reminders (deadline pressure engine) -----
+
+model Reminder {
+  id     String    @id @default(cuid())
+  userId String
+  taskId String?
+  billId String?
+  fireAt DateTime
+  level  String
+  sentAt DateTime?
+
+  user User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  task Task? @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  bill Bill? @relation(fields: [billId], references: [id], onDelete: Cascade)
+
+  @@index([userId, fireAt])
+}
