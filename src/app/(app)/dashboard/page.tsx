@@ -9,7 +9,6 @@ import { env } from "@/lib/env";
 import { listTodayTasks, listWeekDeadlines } from "@/lib/tasks/task-queries";
 import { populateTinyFirstSteps } from "@/lib/tasks/tiny-first-step";
 import { listActiveReminders } from "@/lib/reminders/active";
-import { maybeSyncCalendar } from "@/lib/google/sync";
 import { moneyDashboardSummary } from "@/lib/money/dashboard-summary";
 import { buildHealthThisWeek, checkWindDown } from "@/lib/health/dashboard-summary";
 import { ReminderBanners } from "@/components/reminder-banners";
@@ -22,6 +21,7 @@ import { ReauthBanner } from "@/app/(app)/dashboard/_components/reauth-banner";
 import { MoneyThisMonthCard } from "@/app/(app)/dashboard/_components/money-this-month-card";
 import { HealthThisWeekCard } from "@/app/(app)/dashboard/_components/health-this-week-card";
 import { WindDownBanner } from "@/app/(app)/dashboard/_components/wind-down-banner";
+import { CalendarSyncIndicator } from "@/app/(app)/dashboard/_components/calendar-sync-indicator";
 
 export const dynamic = "force-dynamic";
 
@@ -55,8 +55,12 @@ export default async function DashboardPage() {
 
   const { start, end } = todayBoundsUtc(tz);
 
-  // Trigger sync first (read-on-demand). Branches the rest of the render.
-  const syncResult = await maybeSyncCalendar(userId);
+  // Calendar sync moved to a background trigger on mount (SWR pattern):
+  // render cached events immediately, refresh once Google responds.
+  const needsReauth = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { googleNeedsReauth: true }
+  }).then((u) => u?.googleNeedsReauth ?? false);
 
   const [
     todayTasks,
@@ -100,7 +104,9 @@ export default async function DashboardPage() {
       dueAt: t.dueAt,
       updatedAt: t.updatedAt,
       tinyFirstStep: t.tinyFirstStep
-    }))
+    })),
+    new Date(),
+    userId
   );
 
   const todayItems: TodayItem[] = [
@@ -130,13 +136,9 @@ export default async function DashboardPage() {
         <p className="text-sm text-muted-foreground">Here's what's on your plate.</p>
       </div>
 
-      {syncResult === "reauth" && <ReauthBanner />}
+      {needsReauth && <ReauthBanner />}
 
-      {syncResult === "failed" && (
-        <p className="rounded-md border bg-muted/30 px-3 py-2 text-sm text-muted-foreground">
-          Couldn't reach Google right now — showing the latest cached events.
-        </p>
-      )}
+      <CalendarSyncIndicator />
 
       {windDownMinutes !== null && <WindDownBanner minutesRemaining={windDownMinutes} />}
 

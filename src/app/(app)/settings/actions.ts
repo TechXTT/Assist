@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { getServerSession } from "next-auth";
+import { z } from "zod";
 
 import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/db";
@@ -129,4 +130,18 @@ export async function setCalendarSyncEnabled(
       message: "Couldn't fetch that calendar right now. We'll try again on the next sync."
     };
   }
+}
+
+const setAiMonthlyCapSchema = z.object({
+  cents: z.number().int().min(0).max(100_00)
+});
+
+export async function setAiMonthlyCap(input: z.infer<typeof setAiMonthlyCapSchema>) {
+  const session = await requireSession();
+  const data = setAiMonthlyCapSchema.parse(input);
+  await prisma.user.update({
+    where: { id: session.user.id },
+    data: { aiMonthlyCapCents: data.cents }
+  });
+  revalidatePath("/settings");
 }

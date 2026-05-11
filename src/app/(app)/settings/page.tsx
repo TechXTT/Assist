@@ -13,6 +13,8 @@ import {
   NotConnectedError,
   ReauthRequiredError
 } from "@/lib/google/errors";
+import { aiSpendThisMonth, isAiAvailable } from "@/lib/ai/client";
+import { AiUsageCard } from "@/app/(app)/settings/_components/ai-usage-card";
 
 export const dynamic = "force-dynamic";
 
@@ -55,20 +57,23 @@ export default async function SettingsPage() {
     }
   }
 
-  const calendars = connected
-    ? await prisma.calendar.findMany({
-        where: { userId: session.user.id },
-        orderBy: [{ primary: "desc" }, { summary: "asc" }],
-        select: {
-          id: true,
-          summary: true,
-          backgroundColor: true,
-          primary: true,
-          syncEnabled: true,
-          accessRole: true
-        }
-      })
-    : [];
+  const [calendars, aiSpend] = await Promise.all([
+    connected
+      ? prisma.calendar.findMany({
+          where: { userId: session.user.id },
+          orderBy: [{ primary: "desc" }, { summary: "asc" }],
+          select: {
+            id: true,
+            summary: true,
+            backgroundColor: true,
+            primary: true,
+            syncEnabled: true,
+            accessRole: true
+          }
+        })
+      : Promise.resolve([]),
+    aiSpendThisMonth(session.user.id, user.timezone || env.DEFAULT_TIMEZONE)
+  ]);
 
   return (
     <div className="space-y-6">
@@ -90,6 +95,16 @@ export default async function SettingsPage() {
         ) : (
           <ConnectGoogleCard />
         )}
+      </section>
+
+      <section className="space-y-3">
+        <h2 className="text-sm font-medium text-muted-foreground">AI</h2>
+        <AiUsageCard
+          spendCents={aiSpend.spendCents}
+          capCents={aiSpend.capCents}
+          currency={env.DEFAULT_CURRENCY}
+          aiAvailable={isAiAvailable()}
+        />
       </section>
 
       <section className="space-y-3">

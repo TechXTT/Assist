@@ -1,21 +1,33 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import dynamic from "next/dynamic";
 
 import { AccountList } from "@/app/(app)/money/_components/networth/account-list";
 import { AddAccountButton } from "@/app/(app)/money/_components/networth/add-account-button";
-import {
-  CompositionDonut,
-  type CompositionRow
-} from "@/app/(app)/money/_components/networth/composition-donut";
-import {
-  NetworthChart,
-  type ChartPoint
-} from "@/app/(app)/money/_components/networth/networth-chart";
+import { Skeleton } from "@/components/ui/skeleton";
+import type { CompositionRow } from "@/app/(app)/money/_components/networth/composition-donut";
+import type { ChartPoint } from "@/app/(app)/money/_components/networth/networth-chart";
 import { NetworthSummaryCard } from "@/app/(app)/money/_components/networth/networth-summary-card";
 import type { FinancialAccountRow } from "@/lib/money/account-queries";
 import type { HoldingRow } from "@/lib/money/holding-queries";
 import type { SnapshotHistoryRow } from "@/app/(app)/money/_components/networth/snapshot-history-sheet";
+
+const NetworthChart = dynamic(
+  () =>
+    import("@/app/(app)/money/_components/networth/networth-chart").then(
+      (m) => m.NetworthChart
+    ),
+  { ssr: false, loading: () => <Skeleton className="h-56 w-full" /> }
+);
+
+const CompositionDonut = dynamic(
+  () =>
+    import("@/app/(app)/money/_components/networth/composition-donut").then(
+      (m) => m.CompositionDonut
+    ),
+  { ssr: false, loading: () => <Skeleton className="h-56 w-full" /> }
+);
 
 export function NetworthTab({
   accounts,

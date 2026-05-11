@@ -1,15 +1,24 @@
 "use client";
 
 import { useMemo } from "react";
+import dynamic from "next/dynamic";
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Skeleton } from "@/components/ui/skeleton";
 import { HEALTH_COPY } from "@/lib/health/copy";
 import { average, type HabitDay } from "@/lib/health/habit-queries";
 
 import { LogSleepButton } from "@/app/(app)/health/_components/sleep/log-sleep-button";
-import { SleepChart } from "@/app/(app)/health/_components/sleep/sleep-chart";
 import { SleepTargetEditor } from "@/app/(app)/health/_components/sleep/sleep-target-editor";
 import { WindDownControls } from "@/app/(app)/health/_components/sleep/wind-down-controls";
+
+const SleepChart = dynamic(
+  () =>
+    import("@/app/(app)/health/_components/sleep/sleep-chart").then(
+      (m) => m.SleepChart
+    ),
+  { ssr: false, loading: () => <Skeleton className="h-44 w-full" /> }
+);
 
 export function SleepSection({
   last14,

@@ -18,6 +18,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
 import { SignOutMenuItem } from "@/components/sign-out-button";
+import { ThemeToggle } from "@/components/theme-toggle";
 
 function initialsFromName(name?: string | null) {
   if (!name) return "u";
@@ -60,6 +61,8 @@ export function TopNav({ session }: { session: Session }) {
         </nav>
 
         <div className="flex items-center gap-2">
+          <ThemeToggle />
+
           {/* Mobile "more" sheet (Review + Settings) */}
           <Sheet open={moreOpen} onOpenChange={setMoreOpen}>
             <SheetTrigger asChild>

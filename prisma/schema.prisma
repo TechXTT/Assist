@@ -37,6 +37,9 @@ model User {
   windDownMinutesBefore       Int       @default(30)
   lastWindDownDismissedOn     DateTime?
 
+  // AI cap — euros (or USD) in integer cents per month
+  aiMonthlyCapCents           Int       @default(500)
+
   accounts          Account[]
   sessions          Session[]
   tasks             Task[]
@@ -53,6 +56,9 @@ model User {
   exercisePlans     ExercisePlan[]
   exerciseSessions  ExerciseSession[]
   reminders         Reminder[]
+  dailyBriefings    DailyBriefing[]
+  weeklyReviews     WeeklyReview[]
+  aiCalls           AiCall[]
 }
 
 model Account {
@@ -378,6 +384,54 @@ model ExerciseSession {
   occurredAt DateTime
   notes      String?
   createdAt  DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, occurredAt])
+}
+
+// ----- Briefings, Reviews, AI -----
+
+model DailyBriefing {
+  id          String   @id @default(cuid())
+  userId      String
+  forDate     DateTime
+  body        String
+  generatedBy String
+  modelUsed   String?
+  generatedAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, forDate])
+}
+
+model WeeklyReview {
+  id            String   @id @default(cuid())
+  userId        String
+  forWeekStart  DateTime
+  body          String
+  generatedBy   String
+  modelUsed     String?
+  generatedAt   DateTime @default(now())
+  // JSON array of task ids picked as top priorities for the following week.
+  // SQLite has no Json type; switch to Json on Postgres in 6E.
+  topPriorities String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, forWeekStart])
+}
+
+model AiCall {
+  id                 String   @id @default(cuid())
+  userId             String
+  feature            String
+  model              String
+  promptTokens       Int
+  completionTokens   Int
+  estimatedCostCents Int
+  occurredAt         DateTime @default(now())
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 

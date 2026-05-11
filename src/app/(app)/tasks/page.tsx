@@ -27,7 +27,9 @@ export default async function TasksPage() {
       dueAt: t.dueAt,
       updatedAt: t.updatedAt,
       tinyFirstStep: t.tinyFirstStep
-    }))
+    })),
+    new Date(),
+    session.user.id
   );
 
   const view = allTasks.map((t) => ({

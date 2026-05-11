@@ -1,13 +1,22 @@
 "use client";
 
 import { useMemo } from "react";
+import dynamic from "next/dynamic";
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Skeleton } from "@/components/ui/skeleton";
 import { HEALTH_COPY } from "@/lib/health/copy";
 import { average, type HabitDay } from "@/lib/health/habit-queries";
 
 import { MoodScale } from "@/app/(app)/health/_components/mood/mood-scale";
-import { MoodTrendline } from "@/app/(app)/health/_components/mood/mood-trendline";
+
+const MoodTrendline = dynamic(
+  () =>
+    import("@/app/(app)/health/_components/mood/mood-trendline").then(
+      (m) => m.MoodTrendline
+    ),
+  { ssr: false, loading: () => <Skeleton className="h-40 w-full" /> }
+);
 
 export function MoodSection({
   last14,
