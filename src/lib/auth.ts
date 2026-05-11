@@ -9,7 +9,8 @@ const GOOGLE_SCOPES = [
   "email",
   "profile",
   "https://www.googleapis.com/auth/calendar.readonly",
-  "https://www.googleapis.com/auth/gmail.readonly"
+  "https://www.googleapis.com/auth/gmail.readonly",
+  "https://www.googleapis.com/auth/gmail.send"
 ].join(" ");
 
 export const authOptions: NextAuthOptions = {

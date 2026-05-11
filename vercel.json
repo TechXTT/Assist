@@ -1,0 +1,8 @@
+{
+  "crons": [
+    { "path": "/api/cron/briefing", "schedule": "0 * * * *" },
+    { "path": "/api/cron/review", "schedule": "0 * * * *" },
+    { "path": "/api/cron/prices", "schedule": "0 5 * * *" },
+    { "path": "/api/cron/banking", "schedule": "0 3 * * *" }
+  ]
+}

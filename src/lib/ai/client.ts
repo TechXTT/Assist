@@ -19,7 +19,12 @@ function getClient(): Anthropic | null {
   return cachedClient;
 }
 
-export type AiFeature = "tiny_first_step" | "daily_briefing" | "weekly_review";
+export type AiFeature =
+  | "tiny_first_step"
+  | "daily_briefing"
+  | "weekly_review"
+  | "receipt_scan"
+  | "categorize_transaction";
 
 async function monthlySpendCents(userId: string, tz: string): Promise<number> {
   const month = currentMonth(tz);

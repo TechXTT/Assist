@@ -7,6 +7,10 @@ import { EventsTimeline } from "@/app/(app)/money/_components/cashflow/events-ti
 import { IncompleteAccountsHint } from "@/app/(app)/money/_components/cashflow/incomplete-accounts-hint";
 import { MonthlyBuckets } from "@/app/(app)/money/_components/cashflow/monthly-buckets";
 import { RecurringSummary } from "@/app/(app)/money/_components/cashflow/recurring-summary";
+import {
+  ScenarioPanel,
+  type ScenarioItem
+} from "@/app/(app)/money/_components/cashflow/scenario-panel";
 import type { Forecast } from "@/lib/money/cashflow";
 import type { DiscretionaryAuto } from "@/lib/money/discretionary";
 import type { FinancialAccountRow } from "@/lib/money/account-queries";
@@ -22,7 +26,9 @@ export function CashFlowTab({
   discretionaryAuto,
   hasIncome,
   hasOutflows,
-  currency
+  currency,
+  scenarioItems,
+  excludedIds
 }: {
   forecast: Forecast;
   accounts: FinancialAccountRow[];
@@ -35,7 +41,10 @@ export function CashFlowTab({
   hasIncome: boolean;
   hasOutflows: boolean;
   currency: string;
+  scenarioItems: ScenarioItem[];
+  excludedIds: string[];
 }) {
+  const excludedSet = new Set(excludedIds);
   return (
     <div className="space-y-6">
       <CashFlowSummaryRow
@@ -101,6 +110,8 @@ export function CashFlowTab({
         breakdown={forecast.recurringBreakdown}
         currency={currency}
       />
+
+      <ScenarioPanel items={scenarioItems} excludedIds={excludedSet} currency={currency} />
 
       {includeDiscretionary && discretionaryAuto.cents === 0 && (
         <Card>

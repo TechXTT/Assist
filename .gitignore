@@ -39,3 +39,10 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# playwright-mcp scratch dir (logs, screenshots from in-conversation tests)
+.playwright-mcp/
+
+# stray lock files — repo uses npm, ignore pnpm/yarn artifacts if invoked
+pnpm-lock.yaml
+yarn.lock

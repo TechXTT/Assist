@@ -11,7 +11,11 @@ const envSchema = z.object({
   AI_MONTHLY_CAP_USD: z.coerce.number().default(5),
   DEFAULT_TIMEZONE: z.string().default("Europe/Amsterdam"),
   DEFAULT_CURRENCY: z.string().default("EUR"),
-  CALENDAR_SYNC_STALENESS_MINUTES: z.coerce.number().default(15)
+  CALENDAR_SYNC_STALENESS_MINUTES: z.coerce.number().default(15),
+  CRON_SECRET: z.string().optional().default(""),
+  TWELVE_DATA_API_KEY: z.string().optional().default(""),
+  ENABLE_BANKING_APPLICATION_ID: z.string().optional().default(""),
+  ENABLE_BANKING_PRIVATE_KEY_BASE64: z.string().optional().default("")
 });
 
 const parsed = envSchema.safeParse(process.env);

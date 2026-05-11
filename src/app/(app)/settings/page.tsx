@@ -15,6 +15,12 @@ import {
 } from "@/lib/google/errors";
 import { aiSpendThisMonth, isAiAvailable } from "@/lib/ai/client";
 import { AiUsageCard } from "@/app/(app)/settings/_components/ai-usage-card";
+import { NotificationsCard } from "@/app/(app)/settings/_components/notifications-card";
+import {
+  BankConnectionsCard,
+  type BankConnectionRow
+} from "@/app/(app)/settings/_components/bank-connections-card";
+import { isBankingAvailable } from "@/lib/banking/enablebanking";
 
 export const dynamic = "force-dynamic";
 
@@ -29,7 +35,11 @@ export default async function SettingsPage() {
         email: true,
         timezone: true,
         lastCalendarSyncAt: true,
-        googleNeedsReauth: true
+        googleNeedsReauth: true,
+        emailBriefingEnabled: true,
+        emailReviewEnabled: true,
+        emailDeliveryHour: true,
+        emailReviewWeekday: true
       }
     }),
     prisma.account.findFirst({
@@ -57,7 +67,9 @@ export default async function SettingsPage() {
     }
   }
 
-  const [calendars, aiSpend] = await Promise.all([
+  const bankingEnabled = isBankingAvailable();
+
+  const [calendars, aiSpend, bankConnections] = await Promise.all([
     connected
       ? prisma.calendar.findMany({
           where: { userId: session.user.id },
@@ -72,8 +84,55 @@ export default async function SettingsPage() {
           }
         })
       : Promise.resolve([]),
-    aiSpendThisMonth(session.user.id, user.timezone || env.DEFAULT_TIMEZONE)
+    aiSpendThisMonth(session.user.id, user.timezone || env.DEFAULT_TIMEZONE),
+    bankingEnabled
+      ? prisma.bankConnection.findMany({
+          where: { userId: session.user.id },
+          orderBy: { createdAt: "desc" }
+        })
+      : Promise.resolve([])
   ]);
+
+  const bankConnectionRows: BankConnectionRow[] = bankConnections.map((c) => {
+    let accountCount = 0;
+    try {
+      const parsed = c.accountsJson ? (JSON.parse(c.accountsJson) as string[]) : [];
+      if (Array.isArray(parsed)) accountCount = parsed.length;
+    } catch {
+      /* ignore */
+    }
+    return {
+      id: c.id,
+      institutionId: c.institutionId,
+      institutionName: c.institutionName,
+      status: c.status,
+      lastSyncedAt: c.lastSyncedAt,
+      expiresAt: c.expiresAt,
+      accountCount
+    };
+  });
+
+  // Infer a default country code from the user's timezone for the connect
+  // dialog. Falls back to NL for the single-user app default.
+  const tzCountry: Record<string, string> = {
+    Amsterdam: "NL",
+    London: "GB",
+    Berlin: "DE",
+    Paris: "FR",
+    Madrid: "ES",
+    Rome: "IT",
+    Brussels: "BE",
+    Vienna: "AT",
+    Lisbon: "PT",
+    Dublin: "IE",
+    Helsinki: "FI",
+    Stockholm: "SE",
+    Oslo: "NO",
+    Copenhagen: "DK",
+    Warsaw: "PL"
+  };
+  const tzCity = (user.timezone || env.DEFAULT_TIMEZONE).split("/")[1] ?? "Amsterdam";
+  const defaultCountry = tzCountry[tzCity] ?? "NL";
 
   return (
     <div className="space-y-6">
@@ -106,6 +165,31 @@ export default async function SettingsPage() {
           aiAvailable={isAiAvailable()}
         />
       </section>
+
+      {connected && (
+        <section className="space-y-3">
+          <h2 className="text-sm font-medium text-muted-foreground">Email & notifications</h2>
+          <NotificationsCard
+            initial={{
+              emailBriefingEnabled: user.emailBriefingEnabled,
+              emailReviewEnabled: user.emailReviewEnabled,
+              emailDeliveryHour: user.emailDeliveryHour,
+              emailReviewWeekday: user.emailReviewWeekday
+            }}
+            email={user.email}
+          />
+        </section>
+      )}
+
+      {bankingEnabled && (
+        <section className="space-y-3">
+          <h2 className="text-sm font-medium text-muted-foreground">Banking</h2>
+          <BankConnectionsCard
+            connections={bankConnectionRows}
+            defaultCountry={defaultCountry}
+          />
+        </section>
+      )}
 
       <section className="space-y-3">
         <h2 className="text-sm font-medium text-muted-foreground">Preferences</h2>

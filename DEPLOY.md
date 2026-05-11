@@ -78,6 +78,10 @@ gh repo create assist --private --source . --push
    | `DEFAULT_CURRENCY` | `EUR` |
    | `DEFAULT_TIMEZONE` | `Europe/Amsterdam` |
    | `CALENDAR_SYNC_STALENESS_MINUTES` | `15` |
+   | `CRON_SECRET` | Generate fresh: `openssl rand -base64 32`. Vercel auto-injects this as `Authorization: Bearer <secret>` on scheduled cron fires. Required for v2 email delivery and v3 daily price refresh. |
+   | `TWELVE_DATA_API_KEY` | Optional — Twelve Data quote API key for v3 live investment prices. Leave blank to disable (holdings stay manual). Free tier: 8 req/min, 800/day. |
+   | `ENABLE_BANKING_APPLICATION_ID` | Optional — Enable Banking application UUID for v4 banking. Get both from https://enablebanking.com → Control Panel → Applications. Leave blank to hide the Banking section. |
+   | `ENABLE_BANKING_PRIVATE_KEY_BASE64` | Optional — RSA private key, **base64-encoded**, that Enable Banking pairs with your application. Required if the id is set. Generate the encoded form with `base64 -i private.pem` (macOS) or `base64 -w 0 < private.pem` (Linux). |
 
 5. Deploy. The build runs `prisma migrate deploy` against Neon, then builds Next.
 
@@ -87,9 +91,10 @@ Google Cloud Console → APIs & Services → Credentials → your OAuth 2.0 Clie
 
 1. Add `https://<your-project>.vercel.app/api/auth/callback/google` to **Authorized redirect URIs**.
 2. Add `https://<your-project>.vercel.app` to **Authorized JavaScript origins**.
-3. Save.
+3. Confirm the OAuth consent screen has the v2 scopes enabled: Calendar (readonly), Gmail (readonly), **Gmail (send)**. The send scope is new in v2 and is needed for daily briefing / weekly review email delivery.
+4. Save.
 
-If you skip this, the sign-in flow on production will fail with `redirect_uri_mismatch`.
+If you skip the redirect URI step, sign-in fails with `redirect_uri_mismatch`. If you skip the send scope, the first time the cron tries to email you it will trip `ReauthRequiredError` and surface the reauth banner — at which point sign in again to grant the new scope.
 
 ## 6. Smoke test on production
 
@@ -105,6 +110,27 @@ Visit the production URL and run through:
 - [ ] If AI is enabled: `/settings` AI usage counter shows non-zero after the briefing call.
 - [ ] Open on phone at the production URL. Verify the bottom tab bar works.
 - [ ] Toggle dark mode (top nav) and verify every route still looks clean.
+
+## 6b. Verify Vercel Cron registered (v2 + v3 + v4)
+
+`vercel.json` declares four cron entries: `/api/cron/briefing` (hourly), `/api/cron/review` (hourly), `/api/cron/prices` (daily 05:00 UTC), and `/api/cron/banking` (daily 03:00 UTC). After the first deploy:
+
+1. Vercel dashboard → your project → **Cron Jobs** tab. All four should be listed.
+2. Click "Run now" on each and confirm a 200 response. `/api/cron/prices` and `/api/cron/banking` return `{"error":"... not set"}` with status 503 when the relevant env var is blank — that's expected and harmless.
+3. In `/settings` → Email & notifications, enable the daily briefing toggle, set delivery hour to the next round hour, save, and wait for the cron to fire. Email lands in the user's own Gmail.
+4. If you set `TWELVE_DATA_API_KEY`: on `/money` → Net Worth, the "Refresh prices" button appears next to "Add account". Click it once to verify connectivity; the daily cron handles ongoing refresh.
+5. If you set the `ENABLE_BANKING_*` pair: a "Banking" section appears in `/settings`. Connect a bank → you'll be redirected to Enable Banking → your bank → back to `/settings?banking=connected`. Hit "Sync" to pull initial 90 days; the cron takes over after that.
+
+## 6c. Banking callback URL (only if v4 is enabled)
+
+The Enable Banking redirect URL must be **whitelisted in your Enable Banking application settings** — go to Control Panel → Applications → your app → Redirect URLs and add both:
+
+- `http://localhost:3000/api/banking/callback` (dev)
+- `https://<your-project>.vercel.app/api/banking/callback` (prod, or your custom domain)
+
+Without that whitelist, the bank auth flow returns "invalid redirect_url" before the user even sees the consent screen. The callback URL is built from `NEXTAUTH_URL`, so make sure that env var matches your production URL exactly (no trailing slash, scheme + host only).
+
+If a cron returns 401, the `CRON_SECRET` env var isn't set in Vercel — set it (and redeploy if needed).
 
 ## 7. (Optional) Custom domain
 

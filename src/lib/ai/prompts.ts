@@ -51,6 +51,46 @@ Do not include a paragraph encouraging the user to do better next week. The top-
 
 Keep each paragraph short — 2-4 sentences. Total response under 220 words. Plain prose, no markdown.`;
 
+export const RECEIPT_SCAN_SYSTEM_PROMPT = `You extract structured data from a single email message that *might* be a purchase receipt.
+
+You'll receive a JSON object with: subject, from, snippet, body (truncated), and a list of allowed category names the user already maintains.
+
+Output JSON only — no prose, no markdown, no code fences. Schema:
+{
+  "isReceipt": boolean,
+  "amountCents": integer | null,
+  "currency": "EUR" | "USD" | "GBP" | string | null,
+  "occurredAt": "YYYY-MM-DD" | null,
+  "merchant": string | null,
+  "category": string | null
+}
+
+Rules:
+- If the message is NOT a purchase receipt (newsletter, password reset, shipping notification with no price, marketing), set isReceipt=false and all other fields null.
+- amountCents is the total charged in minor units (e.g. €4.50 → 450). Use the grand total, not subtotal.
+- currency is the ISO-4217 code if visible; default to null when unclear.
+- occurredAt is the purchase date in YYYY-MM-DD; if only a sent date is visible, use that.
+- merchant is the store/service name (e.g. "Spotify", "Albert Heijn"), not the sender domain.
+- category MUST be one of the allowed names if a reasonable match exists; otherwise null. Do not invent new categories.
+
+Output ONLY the JSON object, nothing else.`;
+
+export const CATEGORIZE_TRANSACTION_SYSTEM_PROMPT = `You assign a transaction to one of the user's existing budget categories.
+
+You'll receive a JSON object: { description, amountCents (negative = expense), sign ("expense"|"income"), allowedCategories: string[] }.
+
+Output JSON only — no prose, no markdown, no code fences. Schema:
+{ "category": string | null, "confidence": "high" | "medium" | "low" }
+
+Rules:
+- category MUST be exactly one of allowedCategories, or null if no reasonable match exists.
+- Confidence high: description clearly maps (e.g. "Spotify family plan" → "Subscriptions").
+- Confidence medium: plausible inference.
+- Confidence low: any uncertainty — prefer returning null in that case.
+- Do not invent new categories. Do not suggest creating one.
+
+Output ONLY the JSON object, nothing else.`;
+
 export const TINY_FIRST_STEP_SYSTEM_PROMPT = `${BASE_VOICE}
 
 You'll receive a short JSON payload describing a single task that the user has been avoiding (title, days since last update, days until deadline). Output ONE sentence — a tiny, friction-light first step the user can take in under 5 minutes to start the task. The step must be:

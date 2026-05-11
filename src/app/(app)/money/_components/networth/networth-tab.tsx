@@ -5,6 +5,7 @@ import dynamic from "next/dynamic";
 
 import { AccountList } from "@/app/(app)/money/_components/networth/account-list";
 import { AddAccountButton } from "@/app/(app)/money/_components/networth/add-account-button";
+import { RefreshPricesButton } from "@/app/(app)/money/_components/networth/holdings/refresh-prices-button";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { CompositionRow } from "@/app/(app)/money/_components/networth/composition-donut";
 import type { ChartPoint } from "@/app/(app)/money/_components/networth/networth-chart";
@@ -39,7 +40,8 @@ export function NetworthTab({
   liabilityCents,
   deltaThisMonthCents,
   currency,
-  timezone
+  timezone,
+  liveQuotesAvailable
 }: {
   accounts: FinancialAccountRow[];
   snapshots: SnapshotHistoryRow[];
@@ -51,6 +53,7 @@ export function NetworthTab({
   deltaThisMonthCents: number;
   currency: string;
   timezone: string;
+  liveQuotesAvailable: boolean;
 }) {
   const [filterKey, setFilterKey] = useState<string | null>(null);
 
@@ -102,7 +105,10 @@ export function NetworthTab({
         <p className="text-sm text-muted-foreground">
           Net worth across all your accounts. Manual updates only — punch in a number whenever you check.
         </p>
-        <AddAccountButton currency={currency} />
+        <div className="flex items-center gap-2">
+          {liveQuotesAvailable && <RefreshPricesButton holdingCount={holdings.length} />}
+          <AddAccountButton currency={currency} />
+        </div>
       </div>
 
       {isEmpty ? (

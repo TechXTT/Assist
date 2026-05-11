@@ -530,6 +530,111 @@ export async function deleteTransaction(id: string) {
   revalidate();
 }
 
+// ----- Receipt drafts (Gmail scan) -----
+
+const scanReceiptsSchema = z.object({
+  days: z.number().int().min(1).max(30).default(7)
+});
+
+const approveDraftSchema = z.object({
+  amountCents: z.number().int().positive("Amount must be greater than zero."),
+  currency: z.string().min(1).default(env.DEFAULT_CURRENCY),
+  description: z.string().trim().min(1, "Add a description.").max(200),
+  category: z.string().trim().max(40).optional().nullable(),
+  occurredAt: z.string().min(1, "Pick a date.")
+});
+
+export type ScanReceiptsInput = z.infer<typeof scanReceiptsSchema>;
+export type ApproveDraftActionInput = z.infer<typeof approveDraftSchema>;
+
+export async function scanReceiptsAction(input: ScanReceiptsInput) {
+  const session = await requireSession();
+  const data = scanReceiptsSchema.parse(input);
+  const { scanRecentReceipts } = await import("@/lib/money/receipts");
+  const result = await scanRecentReceipts(session.user.id, { days: data.days });
+  revalidate();
+  return result;
+}
+
+export async function approveDraftAction(id: string, input: ApproveDraftActionInput) {
+  const session = await requireSession();
+  const data = approveDraftSchema.parse(input);
+  const { approveDraft } = await import("@/lib/money/receipts");
+  const result = await approveDraft(session.user.id, id, {
+    amountCents: data.amountCents,
+    currency: data.currency,
+    description: data.description,
+    category: data.category?.trim() || null,
+    occurredAt: parseOccurredAt(data.occurredAt)
+  });
+  revalidate();
+  return result;
+}
+
+export async function rejectDraftAction(id: string) {
+  const session = await requireSession();
+  const { rejectDraft } = await import("@/lib/money/receipts");
+  await rejectDraft(session.user.id, id);
+  revalidate();
+}
+
+// ----- Live investment prices (v3) -----
+
+export type RefreshPricesActionResult =
+  | { ok: true; updated: number; unchanged: number; failed: string[] }
+  | { ok: false; reason: "unavailable" | "failed"; message: string };
+
+export async function refreshPricesAction(): Promise<RefreshPricesActionResult> {
+  const session = await requireSession();
+  try {
+    const { refreshPricesForUser } = await import("@/lib/money/refresh-prices");
+    const result = await refreshPricesForUser(session.user.id);
+    revalidate();
+    return { ok: true, ...result };
+  } catch (err) {
+    const { MarketDataUnavailableError } = await import("@/lib/money/market-data");
+    if (err instanceof MarketDataUnavailableError) {
+      return {
+        ok: false,
+        reason: "unavailable",
+        message: "Live prices aren't configured — set TWELVE_DATA_API_KEY."
+      };
+    }
+    const message = err instanceof Error ? err.message : "Refresh failed.";
+    return { ok: false, reason: "failed", message };
+  }
+}
+
+// ----- AI suggestions -----
+
+const suggestCategorySchema = z.object({
+  description: z.string().trim().min(3).max(200),
+  amountCents: z.number().int(),
+  sign: z.enum(["expense", "income"])
+});
+
+export type SuggestCategoryInput = z.infer<typeof suggestCategorySchema>;
+
+export async function suggestCategoryAction(
+  input: SuggestCategoryInput
+): Promise<{ category: string } | null> {
+  const session = await requireSession();
+  const data = suggestCategorySchema.parse(input);
+  const categories = await prisma.budgetCategory.findMany({
+    where: { userId: session.user.id, archived: false },
+    select: { name: true }
+  });
+  const { suggestCategoryViaAI } = await import("@/lib/ai/categorize");
+  const suggestion = await suggestCategoryViaAI({
+    userId: session.user.id,
+    description: data.description,
+    amountCents: data.amountCents,
+    sign: data.sign,
+    allowedCategories: categories.map((c) => c.name)
+  });
+  return suggestion ? { category: suggestion.category } : null;
+}
+
 // ----- Bills -----
 
 function parseDueDate(input: string | null | undefined): Date | null {

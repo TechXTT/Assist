@@ -1,9 +1,10 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { toast } from "sonner";
+import { Sparkles } from "lucide-react";
 import { z } from "zod";
 
 import { cn } from "@/lib/utils";
@@ -21,6 +22,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { parseCentsInput } from "@/lib/money/format";
 import {
   createTransaction,
+  suggestCategoryAction,
   updateTransaction
 } from "@/app/(app)/money/actions";
 import type { CategoryRow } from "@/lib/money/category-queries";
@@ -70,6 +72,58 @@ export function TransactionForm(props: Props) {
 
   const sign = form.watch("sign");
   const selectedCategory = form.watch("category") ?? "";
+  const watchedDescription = form.watch("description") ?? "";
+  const watchedAmount = form.watch("amount") ?? "";
+
+  const [suggestion, setSuggestion] = useState<string | null>(null);
+  const [suggesting, setSuggesting] = useState(false);
+  const [rejectedSuggestions] = useState(() => new Set<string>());
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    if (selectedCategory) {
+      setSuggestion(null);
+      return;
+    }
+    const desc = watchedDescription.trim();
+    if (desc.length < 3) {
+      setSuggestion(null);
+      return;
+    }
+    const cents = parseCentsInput(watchedAmount);
+    if (cents === null) {
+      setSuggestion(null);
+      return;
+    }
+    const signed = sign === "expense" ? -Math.abs(cents) : Math.abs(cents);
+    const cacheKey = `${desc.toLowerCase()}::${signed}`;
+    if (rejectedSuggestions.has(cacheKey)) return;
+
+    debounceRef.current = setTimeout(async () => {
+      setSuggesting(true);
+      try {
+        const result = await suggestCategoryAction({
+          description: desc,
+          amountCents: signed,
+          sign
+        });
+        if (result && !rejectedSuggestions.has(cacheKey)) {
+          setSuggestion(result.category);
+        } else {
+          setSuggestion(null);
+        }
+      } catch {
+        setSuggestion(null);
+      } finally {
+        setSuggesting(false);
+      }
+    }, 700);
+
+    return () => {
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+    };
+  }, [watchedDescription, watchedAmount, sign, selectedCategory, rejectedSuggestions]);
 
   async function onSubmit(values: TransactionFormValues) {
     const cents = parseCentsInput(values.amount);
@@ -203,6 +257,42 @@ export function TransactionForm(props: Props) {
                   >
                     + New
                   </button>
+                </div>
+              )}
+              {!selectedCategory && !creatingCategory && (suggestion || suggesting) && (
+                <div className="flex items-center gap-2 pt-1">
+                  <Sparkles className="h-3 w-3 text-muted-foreground" aria-hidden />
+                  {suggesting && !suggestion ? (
+                    <span className="text-xs text-muted-foreground">Thinking…</span>
+                  ) : suggestion ? (
+                    <>
+                      <span className="text-xs text-muted-foreground">Try</span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          field.onChange(suggestion);
+                          setSuggestion(null);
+                        }}
+                        className="inline-flex items-center rounded-full border border-foreground/30 bg-muted/50 px-2 py-0.5 text-xs hover:bg-muted"
+                      >
+                        {suggestion}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const desc = watchedDescription.trim().toLowerCase();
+                          const cents = parseCentsInput(watchedAmount);
+                          const signed = sign === "expense" ? -Math.abs(cents ?? 0) : Math.abs(cents ?? 0);
+                          rejectedSuggestions.add(`${desc}::${signed}`);
+                          setSuggestion(null);
+                        }}
+                        aria-label="Dismiss suggestion"
+                        className="text-xs text-muted-foreground hover:underline"
+                      >
+                        no
+                      </button>
+                    </>
+                  ) : null}
                 </div>
               )}
               <FormMessage />

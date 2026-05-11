@@ -40,6 +40,14 @@ model User {
   // AI cap — euros (or USD) in integer cents per month
   aiMonthlyCapCents           Int       @default(500)
 
+  // Email & notifications (v2 — Inbox & Outbox)
+  emailBriefingEnabled        Boolean   @default(false)
+  emailReviewEnabled          Boolean   @default(false)
+  emailDeliveryHour           Int       @default(7)
+  emailReviewWeekday          Int       @default(0)
+  lastBriefingEmailSentOn     DateTime?
+  lastReviewEmailSentOn       DateTime?
+
   accounts          Account[]
   sessions          Session[]
   tasks             Task[]
@@ -59,6 +67,8 @@ model User {
   dailyBriefings    DailyBriefing[]
   weeklyReviews     WeeklyReview[]
   aiCalls           AiCall[]
+  receiptDrafts     ReceiptDraft[]
+  bankConnections   BankConnection[]
 }
 
 model Account {
@@ -304,19 +314,26 @@ model BalanceSnapshot {
 }
 
 model Transaction {
-  id          String   @id @default(cuid())
-  userId      String
-  amountCents Int
-  currency    String   @default("EUR")
-  description String
-  category    String?
-  occurredAt  DateTime
-  source      String   @default("manual")
-  externalId  String?
+  id                   String   @id @default(cuid())
+  userId               String
+  amountCents          Int
+  currency             String   @default("EUR")
+  description          String
+  category             String?
+  occurredAt           DateTime
+  source               String   @default("manual")
+  externalId           String?
+  sourceMessageId      String?
+  sourceMessageSnippet String?
+  bankConnectionId     String?
 
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user           User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  bankConnection BankConnection? @relation(fields: [bankConnectionId], references: [id], onDelete: SetNull)
 
   @@index([userId, occurredAt])
+  @@index([userId, sourceMessageId])
+  @@index([userId, source, externalId])
+  @@index([bankConnectionId])
 }
 
 model BudgetCategory {
@@ -436,6 +453,51 @@ model AiCall {
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId, occurredAt])
+}
+
+// ----- Bank connections (GoCardless Bank Account Data, v4) -----
+
+model BankConnection {
+  id              String    @id @default(cuid())
+  userId          String
+  requisitionId   String    @unique
+  agreementId     String?
+  institutionId   String
+  institutionName String
+  status          String    @default("pending")
+  // JSON-serialized array of GoCardless account uuids (BAD API). Each account
+  // is fetched via the API on sync; we keep them in this column to avoid a
+  // separate BankAccount table for v4 scope.
+  accountsJson    String?
+  expiresAt       DateTime?
+  lastSyncedAt    DateTime?
+  createdAt       DateTime  @default(now())
+
+  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  transactions Transaction[]
+
+  @@index([userId, status])
+}
+
+// ----- Receipt drafts (Gmail receipt scanning, v2) -----
+
+model ReceiptDraft {
+  id                String   @id @default(cuid())
+  userId            String
+  gmailMessageId    String
+  snippet           String
+  parsedAmountCents Int?
+  parsedCurrency    String?
+  parsedDate        DateTime?
+  parsedMerchant    String?
+  suggestedCategory String?
+  status            String   @default("pending")
+  createdAt         DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, gmailMessageId])
+  @@index([userId, status])
 }
 
 // ----- Reminders (deadline pressure engine) -----

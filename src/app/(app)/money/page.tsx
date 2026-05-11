@@ -27,6 +27,8 @@ import {
   monthlyIncomeSummary,
   type TransactionTypeFilter
 } from "@/lib/money/transaction-queries";
+import { listPendingDrafts } from "@/lib/money/receipts";
+import { isMarketDataAvailable } from "@/lib/money/market-data";
 import { currentMonth, customRange, lastMonth, type Range } from "@/lib/money/period";
 import {
   MoneyTabs,
@@ -49,7 +51,15 @@ type SearchParams = {
   to?: string;
   categories?: string;
   type?: string;
+  excludeBills?: string;
+  excludeSubs?: string;
+  excludeAccounts?: string;
 };
+
+function parseIds(value: string | undefined): string[] {
+  if (!value) return [];
+  return value.split(",").map((s) => s.trim()).filter(Boolean);
+}
 
 function readTab(value: string | undefined): MoneyTab {
   if (
@@ -146,7 +156,8 @@ export default async function MoneyPage({
     history,
     startOfMonthNet,
     allSnapshots,
-    allHoldings
+    allHoldings,
+    receiptDrafts
   ] = await Promise.all([
     listCategories(session.user.id, { includeArchived: false }),
     listCategories(session.user.id, { includeArchived: true }),
@@ -178,7 +189,8 @@ export default async function MoneyPage({
         note: true
       }
     }),
-    listAllHoldings(session.user.id)
+    listAllHoldings(session.user.id),
+    listPendingDrafts(session.user.id)
   ]);
 
   const deltaThisMonthCents =
@@ -198,6 +210,9 @@ export default async function MoneyPage({
   const discretionaryAuto = await computeDiscretionaryDaily(session.user.id, 60);
   const discretionaryDailyCents =
     user?.cashFlowDiscretionaryDailyCents ?? discretionaryAuto.cents;
+  const excludedBills = parseIds(searchParams.excludeBills);
+  const excludedSubs = parseIds(searchParams.excludeSubs);
+  const excludedAccounts = parseIds(searchParams.excludeAccounts);
   const forecast = await buildForecastWithThreshold({
     userId: session.user.id,
     horizonDays,
@@ -205,8 +220,34 @@ export default async function MoneyPage({
     includeDiscretionary,
     discretionaryDailyCents: includeDiscretionary ? discretionaryDailyCents : 0,
     tightThresholdCents: thresholdCents,
+    tz,
+    excludedBillIds: excludedBills,
+    excludedSubscriptionIds: excludedSubs,
+    excludedAccountIds: excludedAccounts
+  });
+  // Scenario items: all recurring sources (regardless of exclusion) so the UI can list them.
+  const scenarioBaseline = await buildForecastWithThreshold({
+    userId: session.user.id,
+    horizonDays,
+    startingBalanceCents,
+    includeDiscretionary: false,
+    discretionaryDailyCents: 0,
+    tightThresholdCents: thresholdCents,
     tz
   });
+  const scenarioItems = scenarioBaseline.recurringBreakdown
+    .filter((r) => r.kind === "bill" || r.kind === "subscription" || r.kind === "loan_payment" || r.kind === "credit_payment")
+    .map((r) => {
+      // recurringBreakdown labels are unique within a forecast; we need the source id.
+      // The cashflow lib doesn't carry ids in the breakdown — so re-derive from events.
+      const evt = scenarioBaseline.events.find(
+        (e) => e.kind === r.kind && e.label === r.label && e.sourceId
+      );
+      return evt?.sourceId
+        ? { id: evt.sourceId, label: r.label, monthlyCents: r.monthlyCents, kind: r.kind }
+        : null;
+    })
+    .filter((x): x is { id: string; label: string; monthlyCents: number; kind: typeof scenarioBaseline.recurringBreakdown[number]["kind"] } => x !== null);
   const hasIncome = incomeSources.some((s) => s.active);
   const hasOutflows =
     bills.length > 0 ||
@@ -246,6 +287,15 @@ export default async function MoneyPage({
             type={type}
             incomeMonthCount={incomeMonth.count}
             incomeMonthTotalCents={incomeMonth.totalCents}
+            receiptDrafts={receiptDrafts.map((d) => ({
+              id: d.id,
+              snippet: d.snippet,
+              parsedAmountCents: d.parsedAmountCents,
+              parsedCurrency: d.parsedCurrency,
+              parsedDate: d.parsedDate,
+              parsedMerchant: d.parsedMerchant,
+              suggestedCategory: d.suggestedCategory
+            }))}
           />
         }
         budgets={
@@ -278,6 +328,8 @@ export default async function MoneyPage({
             hasIncome={hasIncome}
             hasOutflows={hasOutflows}
             currency={currency}
+            scenarioItems={scenarioItems}
+            excludedIds={[...excludedBills, ...excludedSubs, ...excludedAccounts]}
           />
         }
         networth={
@@ -292,6 +344,7 @@ export default async function MoneyPage({
             deltaThisMonthCents={deltaThisMonthCents}
             currency={currency}
             timezone={tz}
+            liveQuotesAvailable={isMarketDataAvailable()}
           />
         }
       />

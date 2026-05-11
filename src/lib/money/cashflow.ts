@@ -424,7 +424,7 @@ function computeRecurringTotals(
 
 // ----- Main entry point -----
 
-export async function buildForecast(args: {
+export type ForecastInput = {
   userId: string;
   horizonDays: number;
   startingBalanceCents: number;
@@ -432,11 +432,20 @@ export async function buildForecast(args: {
   discretionaryDailyCents: number;
   tz: string;
   now?: Date;
-}): Promise<Forecast> {
+  /** Recurring sources to omit from the forecast (scenario modeling). */
+  excludedBillIds?: string[];
+  excludedSubscriptionIds?: string[];
+  excludedAccountIds?: string[];
+};
+
+export async function buildForecast(args: ForecastInput): Promise<Forecast> {
   const now = args.now ?? new Date();
   const end = endOfHorizon(now, args.horizonDays);
+  const excludedBills = new Set(args.excludedBillIds ?? []);
+  const excludedSubs = new Set(args.excludedSubscriptionIds ?? []);
+  const excludedAccounts = new Set(args.excludedAccountIds ?? []);
 
-  const [incomeSources, bills, subscriptions, accounts] = await Promise.all([
+  const [incomeSources, billsRaw, subscriptionsRaw, accountsRaw] = await Promise.all([
     prisma.incomeSource.findMany({
       where: { userId: args.userId, active: true },
       select: {
@@ -492,6 +501,10 @@ export async function buildForecast(args: {
     })
   ]);
 
+  const bills = billsRaw.filter((b) => !excludedBills.has(b.id));
+  const subscriptions = subscriptionsRaw.filter((s) => !excludedSubs.has(s.id));
+  const accounts = accountsRaw.filter((a) => !excludedAccounts.has(a.id));
+
   const incomeEvents = generateIncomeEvents(incomeSources, end, args.tz);
   const billEvents = generateBillEvents(bills, now, end, args.tz);
   const subEvents = generateSubscriptionEvents(subscriptions, now, end);
@@ -532,7 +545,7 @@ export async function buildForecast(args: {
  * is loaded from User prefs.
  */
 export async function buildForecastWithThreshold(
-  args: Parameters<typeof buildForecast>[0] & { tightThresholdCents: number }
+  args: ForecastInput & { tightThresholdCents: number }
 ): Promise<Forecast> {
   const base = await buildForecast(args);
   const tightSpots = detectTightSpots(base.runningBalance, args.tightThresholdCents);

@@ -12,6 +12,10 @@ import {
   TransactionFilters
 } from "@/app/(app)/money/_components/spending/transaction-filters";
 import { TransactionsList } from "@/app/(app)/money/_components/spending/transactions-list";
+import {
+  ReceiptsCard,
+  type ReceiptDraftRow
+} from "@/app/(app)/money/_components/spending/receipts-card";
 import type { CategoryRow } from "@/lib/money/category-queries";
 import type {
   CategoryBreakdown,
@@ -33,7 +37,8 @@ export function SpendingTab({
   selectedCategoryNames,
   type,
   incomeMonthCount,
-  incomeMonthTotalCents
+  incomeMonthTotalCents,
+  receiptDrafts
 }: {
   categories: CategoryRow[];
   allCategories: CategoryRow[];
@@ -47,6 +52,7 @@ export function SpendingTab({
   type: TransactionTypeFilter;
   incomeMonthCount: number;
   incomeMonthTotalCents: number;
+  receiptDrafts: ReceiptDraftRow[];
 }) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
@@ -126,6 +132,14 @@ export function SpendingTab({
         emptyCopy={emptyCopy}
         categoryColorByName={colorByName}
       />
+
+      {type !== "income" && (
+        <ReceiptsCard
+          drafts={receiptDrafts}
+          categories={categories}
+          currency={currency}
+        />
+      )}
 
       <TransactionDetailSheet
         transaction={detail}
